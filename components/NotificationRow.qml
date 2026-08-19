@@ -269,13 +269,27 @@ CursorSurface {
         }
       }
 
-      Text {
+      Flow {
+        width: parent.width
+        height: visible ? childrenRect.height : 0
         visible: root.notificationActions.length > 0
-        text: "Actions"
-        color: Util.alpha(root.foreground, 0.68)
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        font.bold: true
+        spacing: Style.space(7)
+
+        Repeater {
+          model: root.notificationActions
+          delegate: Button {
+            required property var modelData
+            readonly property var actionState: root.service
+              ? root.service.actionState(root.notification.notificationKey, modelData.id)
+              : ({ state: "idle", text: "" })
+            readonly property bool trusted: modelData.action !== "http" || root.allowHttpActions
+
+            text: (actionState.state === "working" ? "Working"
+              : (actionState.state === "done" ? "Done" : String(modelData.label || "Action"))).toUpperCase()
+            enabled: root.actionsEnabled && trusted && actionState.state !== "working"
+            onClicked: root.actionRequested(root.notification.notificationKey, modelData)
+          }
+        }
       }
 
       Repeater {
@@ -288,13 +302,6 @@ CursorSurface {
             ? root.service.actionState(root.notification.notificationKey, modelData.id)
             : ({ state: "idle", text: "" })
           readonly property bool trusted: modelData.action !== "http" || root.allowHttpActions
-
-          Button {
-            text: parent.actionState.state === "working" ? "Working"
-              : (parent.actionState.state === "done" ? "Done" : String(parent.modelData.label || "Action"))
-            enabled: root.actionsEnabled && parent.trusted && parent.actionState.state !== "working"
-            onClicked: root.actionRequested(root.notification.notificationKey, parent.modelData)
-          }
 
           Text {
             visible: parent.modelData.action === "http"
