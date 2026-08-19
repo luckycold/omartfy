@@ -16,22 +16,51 @@ BarWidget {
     ? panelLoader.item.popoutSwitchClosing === true : false
   readonly property int unreadCount: ntfyService ? ntfyService.unreadCount : 0
   readonly property int urgentUnreadCount: ntfyService ? ntfyService.urgentUnreadCount : 0
+  property bool dndPopupOpen: false
+  property double nowMs: Date.now()
+  readonly property bool dndActive: ntfyService ? ntfyService.dndActive : false
+  readonly property double muteUntil: ntfyService ? ntfyService.muteUntil : 0
   readonly property var servers: ntfyService ? ntfyService.servers : []
   readonly property int enabledCount: servers.filter(function(server) { return server.enabled !== false }).length
   readonly property int connectedCount: servers.filter(function(server) {
     return server.enabled !== false && server.state === "connected"
   }).length
-  readonly property color iconColor: urgentUnreadCount > 0 ? Color.urgent
-    : (unreadCount > 0 ? Color.accent : (bar ? bar.foreground : Color.foreground))
+  readonly property color iconColor: dndActive
+    ? Util.alpha(bar ? bar.foreground : Color.foreground, 0.55)
+    : (urgentUnreadCount > 0 ? Color.urgent
+      : (unreadCount > 0 ? Color.accent : (bar ? bar.foreground : Color.foreground)))
   readonly property string badgeText: unreadCount > 99 ? "99+" : String(unreadCount)
 
-  function open() { if (panelLoader.item) panelLoader.item.open() }
-  function close() { if (panelLoader.item) panelLoader.item.close() }
-  function toggle() { if (panelLoader.item) panelLoader.item.toggle() }
+  function open() {
+    root.dndPopupOpen = false
+    if (panelLoader.item) panelLoader.item.open()
+  }
+  function close() {
+    root.dndPopupOpen = false
+    if (panelLoader.item) panelLoader.item.close()
+  }
+  function toggle() {
+    root.dndPopupOpen = false
+    if (panelLoader.item) panelLoader.item.toggle()
+  }
   function closeForPopoutSwitch() {
+    root.dndPopupOpen = false
     if (panelLoader.item && typeof panelLoader.item.closeForPopoutSwitch === "function")
       panelLoader.item.closeForPopoutSwitch()
     else root.close()
+  }
+
+  function dndStatus() {
+    if (!root.dndActive) return "DND off"
+    if (root.muteUntil < 0) return "DND until turned off"
+    var minutes = Math.max(1, Math.ceil((root.muteUntil * 1000 - root.nowMs) / 60000))
+    if (minutes < 60) return "DND " + minutes + "m remaining"
+    return "DND " + Math.ceil(minutes / 60) + "h remaining"
+  }
+
+  function setMute(durationSeconds) {
+    if (root.ntfyService) root.ntfyService.setMute(durationSeconds)
+    root.dndPopupOpen = false
   }
 
   function injectPanel() {
@@ -64,9 +93,11 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     text: ""
-    tooltipText: root.servers.length === 0
-      ? "Add a server to begin"
-      : Model.serverSummary(root.servers, root.unreadCount)
+    tooltipText: root.dndActive
+      ? root.dndStatus()
+      : (root.servers.length === 0
+        ? "Add a server to begin"
+        : Model.serverSummary(root.servers, root.unreadCount))
     iconComponent: Component {
       Item {
         Image {
@@ -104,11 +135,74 @@ BarWidget {
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.LeftButton) root.toggle()
       else if (buttonCode === Qt.MiddleButton && root.ntfyService) root.ntfyService.reload()
+      else if (buttonCode === Qt.RightButton) {
+        var nextOpen = !root.dndPopupOpen
+        if (panelLoader.item) panelLoader.item.close()
+        root.dndPopupOpen = nextOpen
+      }
+    }
+  }
+
+  Timer {
+    interval: 30000
+    repeat: true
+    running: root.dndActive
+    onTriggered: root.nowMs = Date.now()
+  }
+
+  PopupCard {
+    id: dndPopup
+    anchorItem: button
+    owner: root
+    bar: root.bar
+    open: root.dndPopupOpen
+    contentWidth: dndPopup.fittedContentWidth(Style.space(220))
+    contentHeight: dndPopup.fittedContentHeight(dndColumn.implicitHeight)
+
+    Column {
+      id: dndColumn
+      anchors.fill: parent
+      spacing: Style.space(6)
+
+      Text {
+        text: root.dndStatus()
+        color: root.bar ? root.bar.foreground : Color.foreground
+        font.family: button.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
+
+      Button {
+        width: parent.width
+        text: "Mute for 1 hour"
+        onClicked: root.setMute(60 * 60)
+      }
+      Button {
+        width: parent.width
+        text: "Mute for 4 hours"
+        onClicked: root.setMute(4 * 60 * 60)
+      }
+      Button {
+        width: parent.width
+        text: "Mute for 8 hours"
+        onClicked: root.setMute(8 * 60 * 60)
+      }
+      Button {
+        width: parent.width
+        text: "Mute until turned off"
+        onClicked: root.setMute(-1)
+      }
+      Button {
+        width: parent.width
+        visible: root.dndActive
+        text: "Turn DND off"
+        onClicked: root.setMute(0)
+      }
     }
   }
 
   Rectangle {
-    visible: root.unreadCount > 0
+    visible: root.unreadCount > 0 && !root.dndActive
     anchors.right: parent.right
     anchors.top: parent.top
     anchors.rightMargin: -Style.space(2)
@@ -127,6 +221,17 @@ BarWidget {
       font.pixelSize: Style.space(8)
       font.bold: true
     }
+  }
+
+  Text {
+    visible: root.dndActive
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    text: "z"
+    color: bar ? bar.foreground : Color.foreground
+    font.family: button.fontFamily
+    font.pixelSize: Style.space(8)
+    font.bold: true
   }
 
   Rectangle {

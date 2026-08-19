@@ -10,7 +10,7 @@ A multi-server [ntfy](https://ntfy.sh/) client for the Omarchy bar. Omartfy comb
 - Merged chronological `All` inbox plus per-server tabs
 - Multiple topics and credentials per server profile
 - Bearer token, Basic, and unauthenticated connections
-- Local read, dismiss, and clear state without publishing changes to ntfy
+- Local read, delete, and clear state without publishing changes to ntfy
 - ntfy view, copy, and opt-in HTTP actions
 - Lazy icon and image-attachment previews with strict size, format, redirect, and origin checks
 - Keyboard navigation, inline search, overflow tabs, and a dedicated server editor
@@ -47,27 +47,40 @@ A blank secret while editing an existing profile preserves the stored secret.
 
 ## Keyboard controls
 
+Omarchy plugins do not claim global compositor shortcuts. To open Omartfy directly with
+`Super+N`, add this user-level binding to `~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + N", "Omartfy notifications", "omarchy-shell shell toggle dailen.omartfy '{}'")
+```
+
+The panel focuses its first notification when opened from the shortcut.
+
 | Key | Action |
 | --- | --- |
 | `j` / `k`, Up / Down | Select notification |
 | `h` / `l`, Left / Right | Switch server tab |
-| Enter / Space | Expand selected notification |
+| Enter / Space | Mark selected notification as read |
+| `e` | Expand or collapse selected notification |
 | `1`–`3` | Run the corresponding visible ntfy action |
 | `o` | Open the notification click URL |
 | `a` | Open the attachment URL |
-| `x` | Dismiss locally |
+| `d`, `x`, or Delete | Delete locally |
 | `r` | Reconnect and reload |
 | `s` | Open server settings |
 | `/` | Search |
 | Escape | Close search, nested UI, or panel |
 | Tab / Shift-Tab | Switch adjacent Omarchy panels |
 
+Right-click the Omartfy bar icon for DND controls. Timed or indefinite DND keeps
+collecting notifications but suppresses the unread badge and urgent icon color.
+
 ## Data and security
 
 Omarchy plugins run unsandboxed with the current user's permissions. Omartfy:
 
 - Reads configuration from `${XDG_CONFIG_HOME:-~/.config}/omarchy/ntfy.json`
-- Stores cursor, notification, dismissal, and media state under `${XDG_STATE_HOME:-~/.local/state}/omarchy/ntfy/`
+- Stores cursor, notification, deletion, DND, and media state under `${XDG_STATE_HOME:-~/.local/state}/omarchy/ntfy/`
 - Writes configuration and state atomically with mode `0600`; the state directory uses mode `0700`
 - Stores configured tokens and passwords locally in the mode-`0600` JSON configuration file; it does not use a keyring
 - Sends credentials only in HTTP authorization headers, never URLs or process arguments

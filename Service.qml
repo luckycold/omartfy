@@ -18,6 +18,9 @@ Item {
   property int nextRequestNumber: 1
   property var actionStates: ({})
   property var mediaStates: ({})
+  property double muteUntil: 0
+  property double nowMs: Date.now()
+  readonly property bool dndActive: muteUntil < 0 || muteUntil * 1000 > nowMs
 
   signal configCompleted(var result)
   signal testCompleted(var result)
@@ -73,6 +76,8 @@ Item {
   function applySnapshot(message) {
     root.servers = Array.isArray(message.servers) ? message.servers.slice() : []
     root.notifications = Array.isArray(message.notifications) ? message.notifications.slice() : []
+    root.nowMs = Date.now()
+    root.muteUntil = Number(message.muteUntil || 0)
     root.helperReady = true
     root.lastError = ""
     root.updateDerived()
@@ -165,6 +170,10 @@ Item {
     else if (message.event === "notification_upsert") root.upsertNotification(message.notification)
     else if (message.event === "notification_remove") root.removeNotification(message.notificationKey)
     else if (message.event === "server_status") root.updateServerStatus(message)
+    else if (message.event === "mute_status") {
+      root.nowMs = Date.now()
+      root.muteUntil = Number(message.muteUntil || 0)
+    }
     else if (message.event === "action_result") {
       root.setActionState(message.notificationKey, message.actionId,
                           message.ok ? "done" : "error",
@@ -182,12 +191,26 @@ Item {
     return root.send({ cmd: "mark_read", serverId: String(serverId || "all") })
   }
 
-  function dismiss(notificationKey) {
-    return root.send({ cmd: "dismiss", notificationKey: String(notificationKey || "") })
+  function markNotificationRead(notificationKey) {
+    return root.send({
+      cmd: "mark_notification_read",
+      notificationKey: String(notificationKey || "")
+    })
+  }
+
+  function deleteNotification(notificationKey) {
+    return root.send({
+      cmd: "delete_notification",
+      notificationKey: String(notificationKey || "")
+    })
   }
 
   function clear(serverId) {
     return root.send({ cmd: "clear", serverId: String(serverId || "all") })
+  }
+
+  function setMute(durationSeconds) {
+    return root.send({ cmd: "set_mute", durationSeconds: Number(durationSeconds || 0) })
   }
 
   function performAction(notificationKey, action) {
@@ -222,6 +245,16 @@ Item {
 
   function testServer(server) {
     return root.send({ cmd: "test_server", server: server })
+  }
+
+  Timer {
+    interval: 30000
+    repeat: true
+    running: root.muteUntil !== 0
+    onTriggered: {
+      root.nowMs = Date.now()
+      if (root.muteUntil > 0 && root.muteUntil * 1000 <= root.nowMs) root.setMute(0)
+    }
   }
 
   function reload() {

@@ -21,6 +21,7 @@ Item {
 
   signal done()
   signal serverDeleted(string serverId)
+  signal serverSelected(string serverId)
 
   function selectSavedServer() {
     if (!root.visible || root.addingServer || root.editingId || root.servers.length === 0) return
@@ -218,12 +219,28 @@ Item {
 
         Repeater {
           model: root.servers
-          delegate: Button {
+          delegate: Row {
+            id: serverRow
             required property var modelData
             width: content.width
-            text: String(modelData.label || "Server") + "  ·  "
-              + String(modelData.state || (modelData.enabled ? "connecting" : "disabled"))
-            onClicked: root.editServer(modelData)
+            spacing: Style.space(4)
+
+            Button {
+              width: Math.max(0, serverRow.width - editButton.implicitWidth - serverRow.spacing)
+              text: String(serverRow.modelData.label || "Server") + "  ·  "
+                + String(serverRow.modelData.state
+                  || (serverRow.modelData.enabled ? "connecting" : "disabled"))
+              onClicked: root.serverSelected(String(serverRow.modelData.id || ""))
+            }
+
+            PanelActionButton {
+              id: editButton
+              iconText: "✎"
+              tooltipText: "Edit server"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.editServer(serverRow.modelData)
+            }
           }
         }
       }

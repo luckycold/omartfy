@@ -68,7 +68,6 @@ Panel {
     root.selectedIndex = 0
     root.expandedKey = ""
     serverMorePopup.close()
-    if (root.ntfyService) root.ntfyService.markRead(root.selectedServerId)
   }
 
   function moveCursor(dx, dy) {
@@ -91,17 +90,15 @@ Panel {
     root.expandedKey = root.expandedKey === row.notificationKey ? "" : row.notificationKey
   }
 
-  function performVisibleAction(number) {
+  function markSelectedRead() {
     var row = root.selectedRow()
-    if (!row || root.expandedKey !== row.notificationKey || !root.ntfyService) return
-    var actions = Array.isArray(row.actions) ? row.actions : []
-    if (number >= 0 && number < actions.length)
-      root.ntfyService.performAction(row.notificationKey, actions[number])
+    if (row && row.unread && root.ntfyService)
+      root.ntfyService.markNotificationRead(row.notificationKey)
   }
 
-  function dismissSelected() {
+  function deleteSelected() {
     var row = root.selectedRow()
-    if (row && root.ntfyService) root.ntfyService.dismiss(row.notificationKey)
+    if (row && root.ntfyService) root.ntfyService.deleteNotification(row.notificationKey)
   }
 
   function openSpecial(actionId) {
@@ -123,6 +120,8 @@ Panel {
       Qt.callLater(function() { searchField.forceActiveFocus() })
     } else if (text === "o") root.openSpecial("__click")
     else if (text === "a") root.openSpecial("__attachment")
+    else if (text === "e") root.toggleSelected()
+    else if (text === "d") root.deleteSelected()
     else if (text === "1" || text === "2" || text === "3")
       root.performVisibleAction(Number(text) - 1)
   }
@@ -135,8 +134,11 @@ Panel {
   }
 
   onOpenedChanged: {
-    if (opened && root.ntfyService) root.ntfyService.markRead(root.selectedServerId)
-    if (!opened) {
+    if (opened) {
+      root.selectedIndex = 0
+      root.expandedKey = ""
+      Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    } else {
       headerMorePopup.close()
       serverMorePopup.close()
       clearPopup.close()
@@ -166,8 +168,8 @@ Panel {
       blocked: searchField.activeFocus || root.editorOpen || headerMorePopup.opened
         || serverMorePopup.opened || clearPopup.opened
       onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
-      onActivateRequested: root.toggleSelected()
-      onDeleteRequested: root.dismissSelected()
+      onActivateRequested: root.markSelectedRead()
+      onDeleteRequested: root.deleteSelected()
       onTextKey: function(text) { root.handleTextKey(text) }
       onCloseRequested: {
         if (root.searchOpen) {
@@ -177,6 +179,12 @@ Panel {
       }
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
+
+      Shortcut {
+        sequence: "Delete"
+        enabled: root.opened && !root.nestedOpen
+        onActivated: root.deleteSelected()
+      }
       Column {
         id: content
         width: parent.width
@@ -294,6 +302,11 @@ Panel {
             onServerDeleted: function(serverId) {
               if (root.selectedServerId === serverId) root.selectServer("all")
             }
+            onServerSelected: function(serverId) {
+              root.selectServer(serverId)
+              root.editorOpen = false
+              Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+            }
             Keys.onEscapePressed: function(event) {
               root.editorOpen = false
               keyCatcher.forceActiveFocus()
@@ -393,8 +406,11 @@ Panel {
                   root.selectedIndex = rowIndex
                   root.toggleSelected()
                 }
-                onDismissRequested: function(notificationKey) {
-                  if (root.ntfyService) root.ntfyService.dismiss(notificationKey)
+                onMarkReadRequested: function(notificationKey) {
+                  if (root.ntfyService) root.ntfyService.markNotificationRead(notificationKey)
+                }
+                onDeleteRequested: function(notificationKey) {
+                  if (root.ntfyService) root.ntfyService.deleteNotification(notificationKey)
                 }
                 onActionRequested: function(notificationKey, action) {
                   if (root.ntfyService) root.ntfyService.performAction(notificationKey, action)
@@ -417,7 +433,7 @@ Panel {
     modal: false
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
     contentItem: Button {
-      text: "Clear current view"
+      text: "Delete current view"
       onClicked: {
         headerMorePopup.close()
         clearPopup.open()
@@ -453,7 +469,7 @@ Panel {
     contentItem: Column {
       spacing: Style.space(8)
       Text {
-        text: "Clear current view?"
+        text: "Delete all notifications in current view?"
         color: root.contentForeground
         font.family: root.contentFontFamily
         font.pixelSize: Style.font.body
@@ -465,7 +481,7 @@ Panel {
           onClicked: clearPopup.close()
         }
         Button {
-          text: "Clear"
+          text: "Delete all"
           onClicked: {
             if (root.ntfyService) root.ntfyService.clear(root.selectedServerId)
             clearPopup.close()

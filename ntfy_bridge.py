@@ -550,7 +550,7 @@ class Bridge:
             return {"version": 1, "servers": []}
 
     def load_state(self) -> dict[str, Any]:
-        empty = {"version": 1, "servers": {}}
+        empty = {"version": 1, "muteUntil": 0, "servers": {}}
         if not self.state_path.exists():
             return empty
         try:
@@ -558,6 +558,10 @@ class Bridge:
                 raw = json.load(handle)
             if not isinstance(raw, dict) or raw.get("version") != 1 or not isinstance(raw.get("servers"), dict):
                 raise ValueError("Unsupported state format")
+            mute_until = raw.get("muteUntil", 0)
+            if not isinstance(mute_until, (int, float)):
+                mute_until = 0
+            raw["muteUntil"] = int(mute_until)
             return raw
         except (OSError, json.JSONDecodeError, ValueError, TypeError):
             return empty
@@ -581,6 +585,27 @@ class Bridge:
     def persist_state(self) -> None:
         with self.state_lock:
             atomic_json_write(self.state_path, self.state)
+
+    def current_mute_until(self) -> int:
+        with self.state_lock:
+            mute_until = int(self.state.get("muteUntil") or 0)
+            if mute_until > 0 and mute_until <= int(time.time()):
+                self.state["muteUntil"] = 0
+                self.persist_state()
+                return 0
+            return mute_until
+
+    def set_mute(self, duration_seconds: int) -> None:
+        if duration_seconds < 0:
+            mute_until = -1
+        elif duration_seconds == 0:
+            mute_until = 0
+        else:
+            mute_until = int(time.time()) + min(duration_seconds, 7 * 24 * 60 * 60)
+        with self.state_lock:
+            self.state["muteUntil"] = mute_until
+            self.persist_state()
+        self.emit({"event": "mute_status", "muteUntil": mute_until})
 
     def safe_error(self, error: Any, fallback: str = "Request failed") -> str:
         text = bounded_text(error) or fallback
@@ -626,7 +651,12 @@ class Bridge:
                     "state": "disabled" if not server["enabled"] else "connecting", "error": ""
                 })
                 servers.append(public_server(server, status["state"], status["error"]))
-        return {"event": "snapshot", "servers": servers, "notifications": self.all_rows()}
+        return {
+            "event": "snapshot",
+            "servers": servers,
+            "notifications": self.all_rows(),
+            "muteUntil": self.current_mute_until(),
+        }
 
     def normalize_message(self, server_id: str, event: dict[str, Any]) -> dict[str, Any]:
         server = self.server_by_id(server_id)
@@ -742,7 +772,23 @@ class Bridge:
         for row in changed:
             self.emit({"event": "notification_upsert", "notification": row})
 
-    def dismiss(self, notification_key: str) -> bool:
+    def mark_notification_read(self, notification_key: str) -> bool:
+        changed: dict[str, Any] | None = None
+        with self.state_lock:
+            for server in self.config["servers"]:
+                row = self.server_state(server["id"])["notifications"].get(notification_key)
+                if row is None:
+                    continue
+                if row.get("unread"):
+                    row["unread"] = False
+                    changed = qml_notification(row)
+                    self.persist_state()
+                break
+        if changed:
+            self.emit({"event": "notification_upsert", "notification": changed})
+        return changed is not None
+
+    def delete_notification(self, notification_key: str) -> bool:
         with self.state_lock:
             for server in self.config["servers"]:
                 state = self.server_state(server["id"])
@@ -975,7 +1021,7 @@ class Bridge:
             else:
                 raise ValueError("Unsupported action")
             if action.get("clear"):
-                self.dismiss(notification_key)
+                self.delete_notification(notification_key)
             self.emit({"event": "action_result", "requestId": request_id,
                        "notificationKey": notification_key, "actionId": action_id,
                        "ok": True, "status": status, "error": ""})
@@ -1214,10 +1260,18 @@ class Bridge:
             self.reload()
         elif name == "mark_read":
             self.mark_read(str(command.get("serverId") or "all"))
-        elif name == "dismiss":
-            self.dismiss(str(command.get("notificationKey") or ""))
+        elif name == "mark_notification_read":
+            self.mark_notification_read(str(command.get("notificationKey") or ""))
+        elif name == "delete_notification":
+            self.delete_notification(str(command.get("notificationKey") or ""))
         elif name == "clear":
             self.clear(str(command.get("serverId") or "all"))
+        elif name == "set_mute":
+            try:
+                duration = int(command.get("durationSeconds") or 0)
+            except (TypeError, ValueError):
+                duration = 0
+            self.set_mute(duration)
         elif name == "perform_action":
             self.perform_action(request_id, str(command.get("notificationKey") or ""),
                                 str(command.get("actionId") or ""))

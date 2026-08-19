@@ -19,7 +19,8 @@ CursorSurface {
 
   signal hovered(int rowIndex)
   signal activated(int rowIndex)
-  signal dismissRequested(string notificationKey)
+  signal markReadRequested(string notificationKey)
+  signal deleteRequested(string notificationKey)
   signal actionRequested(string notificationKey, var action)
   signal mediaRequested(string notificationKey, string kind)
 
@@ -124,8 +125,10 @@ CursorSurface {
           }
 
           Text {
+            id: titleLabel
             width: parent.width - timeLabel.implicitWidth
               - (root.notification.unread ? Style.space(11) : Style.space(5))
+              - (rowActions.visible ? rowActions.implicitWidth + Style.space(6) : 0)
             text: String(root.notification.title || root.notification.message || "Notification")
             color: root.foreground
             font.family: root.fontFamily
@@ -133,6 +136,32 @@ CursorSurface {
             font.bold: root.notification.unread
             elide: Text.ElideRight
             maximumLineCount: 1
+          }
+
+          Row {
+            id: rowActions
+            visible: root.current
+            spacing: Style.space(1)
+
+            PanelActionButton {
+              size: Style.space(20)
+              iconText: "✓"
+              tooltipText: root.notification.unread ? "Mark as read" : "Already read"
+              enabled: root.notification.unread
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.markReadRequested(root.notification.notificationKey)
+            }
+
+            PanelActionButton {
+              size: Style.space(20)
+              iconText: "×"
+              tooltipText: "Delete"
+              foreground: root.foreground
+              hoverColor: Color.urgent
+              fontFamily: root.fontFamily
+              onClicked: root.deleteRequested(root.notification.notificationKey)
+            }
           }
 
           Text {
@@ -276,11 +305,6 @@ CursorSurface {
             width: parent.width
           }
         }
-      }
-
-      Button {
-        text: "Dismiss"
-        onClicked: root.dismissRequested(root.notification.notificationKey)
       }
     }
   }

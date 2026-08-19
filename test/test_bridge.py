@@ -158,26 +158,46 @@ class BridgeCase(unittest.TestCase):
         bridge.apply_event(server["id"], {"event": "message_delete", "id": "delete-id", "topic": "alerts", "sequence_id": "delete-me"})
         self.assertNotIn(delete_key, bridge.server_state(server["id"])["notifications"])
 
-    def test_read_dismiss_and_clear_survive_restart(self):
+    def test_read_delete_and_clear_survive_restart(self):
         server = normalize_server({"label": "Home", "baseUrl": "https://example.com", "topics": ["alerts"]})
         config = {"version": 1, "servers": [server]}
         bridge = self.make_bridge(config)
         bridge.apply_event(server["id"], {"event": "message", "id": "first", "topic": "alerts", "message": "one"})
+        bridge.apply_event(server["id"], {"event": "message", "id": "second", "topic": "alerts", "message": "two"})
         first_key = f"{server['id']}:alerts:first"
-        bridge.mark_read("all")
-        self.assertFalse(bridge.server_state(server["id"])["notifications"][first_key]["unread"])
-        bridge.dismiss(first_key)
+        second_key = f"{server['id']}:alerts:second"
+        bridge.mark_notification_read(first_key)
+        state = bridge.server_state(server["id"])
+        self.assertFalse(state["notifications"][first_key]["unread"])
+        self.assertTrue(state["notifications"][second_key]["unread"])
+        bridge.delete_notification(first_key)
         bridge.apply_event(server["id"], {"event": "message", "id": "replay", "topic": "alerts",
                                                    "sequence_id": "first", "message": "hidden"})
-        self.assertEqual(bridge.server_state(server["id"])["notifications"], {})
+        self.assertNotIn(first_key, bridge.server_state(server["id"])["notifications"])
         bridge.persist_state()
 
         restarted = Bridge(self.config_path, self.state_dir, io.StringIO())
         self.bridges.append(restarted)
         self.assertIn("alerts:first", restarted.server_state(server["id"])["dismissed"])
-        restarted.apply_event(server["id"], {"event": "message", "id": "second", "topic": "alerts"})
         restarted.clear(server["id"])
         self.assertEqual(restarted.server_state(server["id"])["notifications"], {})
+
+    def test_timed_and_indefinite_mute_state_survives_restart_and_expires(self):
+        bridge = self.make_bridge({"version": 1, "servers": []})
+        bridge.set_mute(3600)
+        mute_until = bridge.current_mute_until()
+        self.assertGreater(mute_until, int(time.time()))
+        self.assertEqual(bridge.snapshot()["muteUntil"], mute_until)
+
+        restarted = Bridge(self.config_path, self.state_dir, io.StringIO())
+        self.bridges.append(restarted)
+        self.assertEqual(restarted.current_mute_until(), mute_until)
+        restarted.set_mute(-1)
+        self.assertEqual(restarted.current_mute_until(), -1)
+        restarted.set_mute(0)
+        self.assertEqual(restarted.current_mute_until(), 0)
+        restarted.state["muteUntil"] = int(time.time()) - 1
+        self.assertEqual(restarted.current_mute_until(), 0)
 
     def test_two_simultaneous_servers_and_auth_error_state(self):
         with RunningServer() as cloud, RunningServer("right-token") as home:
