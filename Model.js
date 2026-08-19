@@ -9,6 +9,39 @@ function parseLine(line) {
   }
 }
 
+function parseBaseUrl(value) {
+  var text = String(value || "").trim()
+  var scheme = /^(https?):\/\//i.exec(text)
+  if (!scheme) return { valid: false, error: "absolute", protocol: "", hostname: "" }
+
+  var remainder = text.substring(scheme[0].length)
+  var boundary = remainder.search(/[\/?#]/)
+  var authority = boundary < 0 ? remainder : remainder.substring(0, boundary)
+  if (!authority) return { valid: false, error: "absolute", protocol: "", hostname: "" }
+  if (authority.indexOf("@") >= 0 || text.indexOf("?") >= 0 || text.indexOf("#") >= 0)
+    return { valid: false, error: "forbidden", protocol: "", hostname: "" }
+
+  var hostname = authority
+  if (authority.charAt(0) === "[") {
+    var closingBracket = authority.indexOf("]")
+    if (closingBracket < 1)
+      return { valid: false, error: "absolute", protocol: "", hostname: "" }
+    hostname = authority.substring(1, closingBracket)
+  } else {
+    var portSeparator = authority.lastIndexOf(":")
+    if (portSeparator >= 0) hostname = authority.substring(0, portSeparator)
+  }
+  if (!hostname)
+    return { valid: false, error: "absolute", protocol: "", hostname: "" }
+
+  return {
+    valid: true,
+    error: "",
+    protocol: scheme[1].toLowerCase() + ":",
+    hostname: hostname
+  }
+}
+
 function priorityMeta(priority) {
   var value = Number(priority)
   if (!isFinite(value) || value < 1 || value > 5) value = 3

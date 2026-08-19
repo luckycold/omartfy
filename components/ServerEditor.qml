@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import qs.Commons
 import qs.Ui
+import "../Model.js" as Model
 
 Item {
   id: root
@@ -35,21 +36,16 @@ Item {
   }
 
   function insecureCredentials() {
-    try {
-      var parsed = new URL(baseUrlField.text.trim())
-      return parsed.protocol === "http:" && root.authType() !== "none" && !root.isLoopback(parsed.hostname)
-    } catch (error) {
-      return false
-    }
+    var parsed = Model.parseBaseUrl(baseUrlField.text)
+    return parsed.valid && parsed.protocol === "http:"
+      && root.authType() !== "none" && !root.isLoopback(parsed.hostname)
   }
 
   function validationError() {
     if (!labelField.text.trim()) return "Label is required"
-    try {
-      var parsed = new URL(baseUrlField.text.trim())
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "Use an HTTP or HTTPS URL"
-      if (parsed.username || parsed.password || parsed.search || parsed.hash) return "URL cannot include credentials, query, or fragment"
-    } catch (error) {
+    var parsed = Model.parseBaseUrl(baseUrlField.text)
+    if (!parsed.valid) {
+      if (parsed.error === "forbidden") return "URL cannot include credentials, query, or fragment"
       return "Enter an absolute HTTP or HTTPS URL"
     }
     var values = root.topics()

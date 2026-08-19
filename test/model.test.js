@@ -15,6 +15,21 @@ test("parseLine isolates malformed input", () => {
   assert.deepEqual(JSON.parse(JSON.stringify(model.parseLine('{"event":"snapshot"}'))), { event: "snapshot" });
 });
 
+test("parseBaseUrl accepts ordinary hosts without relying on URL object properties", () => {
+  const parsed = model.parseBaseUrl("https://ntfy.cloud.widedata.host");
+  assert.equal(parsed.valid, true);
+  assert.equal(parsed.protocol, "https:");
+  assert.equal(parsed.hostname, "ntfy.cloud.widedata.host");
+  assert.equal(model.parseBaseUrl("http://127.0.0.1:8099/ntfy").hostname, "127.0.0.1");
+});
+
+test("parseBaseUrl rejects credentials, query, fragment, and relative URLs", () => {
+  assert.equal(model.parseBaseUrl("https://user:secret@example.com").error, "forbidden");
+  assert.equal(model.parseBaseUrl("https://example.com?token=secret").error, "forbidden");
+  assert.equal(model.parseBaseUrl("https://example.com/#inbox").error, "forbidden");
+  assert.equal(model.parseBaseUrl("example.com").error, "absolute");
+});
+
 test("priorityMeta defaults and marks urgent", () => {
   assert.equal(model.priorityMeta(undefined).value, 3);
   assert.equal(model.priorityMeta(9).value, 3);
