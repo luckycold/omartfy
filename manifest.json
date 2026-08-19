@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "omartify.ntfy",
+  "name": "ntfy",
+  "version": "1.0.0",
+  "author": "Dailen Gunter",
+  "license": "MIT",
+  "description": "Multi-server ntfy notifications for the Omarchy bar.",
+  "kinds": ["service", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "ntfy",
+    "description": "Read and act on notifications from multiple ntfy servers.",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
