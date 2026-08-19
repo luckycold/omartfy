@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/DailenG/omartfy/security/advisories/new
+    about: Report vulnerabilities privately; never post credentials or private notification data.
+  - name: Omarchy support
+    url: https://omarchy.org/
+    about: Use Omarchy support channels for shell-wide issues unrelated to Omartfy.

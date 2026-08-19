@@ -29,8 +29,8 @@ Panel {
   readonly property var notifications: ntfyService ? ntfyService.notifications : []
   readonly property var visibleRows: Model.filterRows(notifications, selectedServerId, searchQuery)
   readonly property var tabState: Model.tabLayout(servers, selectedServerId, 3)
-  readonly property bool nestedOpen: searchOpen || editorOpen || headerMorePopup.opened
-    || serverMorePopup.opened || clearPopup.opened
+  readonly property bool nestedOpen: searchOpen || editorOpen || serverMorePopup.opened
+    || clearPopup.opened
 
   function open() { root.controller.show() }
   function close() { root.controller.hide() }
@@ -139,7 +139,6 @@ Panel {
       root.expandedKey = ""
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     } else {
-      headerMorePopup.close()
       serverMorePopup.close()
       clearPopup.close()
     }
@@ -165,8 +164,8 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: searchField.activeFocus || root.editorOpen || headerMorePopup.opened
-        || serverMorePopup.opened || clearPopup.opened
+      blocked: searchField.activeFocus || root.editorOpen || serverMorePopup.opened
+        || clearPopup.opened
       onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
       onActivateRequested: root.markSelectedRead()
       onDeleteRequested: root.deleteSelected()
@@ -252,8 +251,8 @@ Panel {
               onClicked: root.editorOpen = true
             }
             Button {
-              text: "More"
-              onClicked: headerMorePopup.open()
+              text: "Delete all"
+              onClicked: clearPopup.open()
             }
           }
         }
@@ -426,20 +425,6 @@ Panel {
     }
   }
 
-  Popup {
-    id: headerMorePopup
-    parent: keyCatcher
-    anchors.centerIn: parent
-    modal: false
-    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    contentItem: Button {
-      text: "Delete current view"
-      onClicked: {
-        headerMorePopup.close()
-        clearPopup.open()
-      }
-    }
-  }
 
   Popup {
     id: serverMorePopup

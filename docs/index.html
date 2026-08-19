@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#11131a">
+  <meta name="description" content="Omartfy is a keyboard-first, multi-server ntfy client for the Omarchy bar.">
+  <meta property="og:title" content="Omartfy — ntfy for the Omarchy bar">
+  <meta property="og:description" content="One quiet inbox for ntfy.sh and self-hosted ntfy servers.">
+  <meta property="og:image" content="https://daileng.github.io/omartfy/assets/inbox.png">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://daileng.github.io/omartfy/">
+  <title>Omartfy — ntfy for the Omarchy bar</title>
+  <link rel="icon" href="assets/ntfy-mask.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Omartfy home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>Omartfy</span>
+    </a>
+    <nav aria-label="Primary navigation">
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="#security">Security</a>
+      <a class="nav-strong" href="https://github.com/DailenG/omartfy">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero shell">
+      <div class="hero-copy">
+        <p class="eyebrow">ntfy × Omarchy</p>
+        <h1>Your ntfy inbox,<br><span>inside the Omarchy bar.</span></h1>
+        <p class="lede">Combine ntfy.sh and self-hosted servers in one quiet, keyboard-first panel. Read, delete, search, run trusted actions, and keep every server's state separate.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="#install">Install Omartfy</a>
+          <a class="button secondary" href="https://github.com/DailenG/omartfy/releases/latest">Latest release</a>
+        </div>
+        <ul class="hero-facts" aria-label="Project facts">
+          <li>MIT licensed</li>
+          <li>No Python packages</li>
+          <li>Self-hosted ready</li>
+        </ul>
+      </div>
+      <figure class="hero-shot">
+        <img src="assets/inbox.png" width="440" height="462" alt="Omartfy panel showing a merged inbox from Cloud and Home ntfy servers">
+        <figcaption>Safe demo data shown. The panel follows your active Omarchy theme.</figcaption>
+      </figure>
+    </section>
+
+    <section class="signal-strip" aria-label="Core capabilities">
+      <span>Multi-server</span><span>Local read state</span><span>Timed DND</span><span>ntfy actions</span><span>Keyboard-first</span>
+    </section>
+
+    <section id="features" class="section shell">
+      <div class="section-heading">
+        <p class="eyebrow">One glance, then back to work</p>
+        <h2>Small surface. Complete workflow.</h2>
+        <p>Omartfy keeps notification handling in a compact panel instead of turning the bar into a dashboard.</p>
+      </div>
+      <div class="feature-grid">
+        <article><span class="feature-index">01</span><h3>One merged inbox</h3><p>Read every configured server chronologically in <strong>All</strong>, or jump to a server tab without losing connection context.</p></article>
+        <article><span class="feature-index">02</span><h3>Real ntfy actions</h3><p>View and copy actions work directly. Publisher-supplied HTTP actions remain off until you explicitly trust that server.</p></article>
+        <article><span class="feature-index">03</span><h3>Keyboard-native</h3><p>Navigate with j/k and h/l, mark read with Enter, expand with e, search with /, and run visible actions with 1–3.</p></article>
+        <article><span class="feature-index">04</span><h3>Quiet when needed</h3><p>Right-click the bar icon for timed or indefinite DND. Messages continue collecting while badges and urgency stay muted.</p></article>
+        <article><span class="feature-index">05</span><h3>Restart-safe state</h3><p>Cursors, deduplication, local read/delete state, and DND survive Omarchy shell restarts without changing ntfy upstream.</p></article>
+        <article><span class="feature-index">06</span><h3>Conservative media</h3><p>Useful icons and raster previews load lazily with origin, redirect, format, size, and dimension limits.</p></article>
+      </div>
+    </section>
+
+    <section class="section shell split">
+      <div>
+        <p class="eyebrow">Profiles that stay understandable</p>
+        <h2>ntfy.sh and private servers, side by side.</h2>
+        <p>Each profile owns its label, base URL, topic list, credentials, trust settings, connection state, and unread count. Reverse-proxy path prefixes are supported.</p>
+        <ul class="check-list">
+          <li>Unauthenticated, Bearer token, and Basic auth</li>
+          <li>Multiple comma-separated topics per profile</li>
+          <li>Explicit opt-in for insecure credential transport</li>
+          <li>Blank secrets preserve the current saved value</li>
+        </ul>
+      </div>
+      <figure class="settings-shot">
+        <img src="assets/settings.png" width="440" height="550" alt="Omartfy server settings with two connected demo servers">
+        <figcaption>Profiles are edited locally; no default public topic is created.</figcaption>
+      </figure>
+    </section>
+
+    <section id="install" class="section shell install-card">
+      <div>
+        <p class="eyebrow">Install</p>
+        <h2>One command. No package manager.</h2>
+        <p>Omarchy clones the plugin into your user configuration and enables its bar widget.</p>
+      </div>
+      <div class="terminal" role="region" aria-label="Installation command">
+        <div class="terminal-bar"><span></span><span></span><span></span></div>
+        <code><span class="prompt">$</span> omarchy plugin add https://github.com/DailenG/omartfy --enable</code>
+      </div>
+      <p class="install-note">Open <strong>Settings</strong>, add a server, then add one or more topics. Omartfy does not create a default subscription because ntfy topic names can act as public addresses.</p>
+    </section>
+
+    <section id="security" class="section shell security-card">
+      <div>
+        <p class="eyebrow">Secure defaults</p>
+        <h2>Credentials stay out of URLs and process arguments.</h2>
+      </div>
+      <div class="security-copy">
+        <p>Configuration and state are written atomically with restrictive permissions. TLS verification is never disabled. HTTP actions require per-server opt-in and run only after a user activates them.</p>
+        <a href="https://github.com/DailenG/omartfy/blob/main/SECURITY.md">Read the security policy →</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer shell">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Omartfy</span></div>
+    <p>Built for Omarchy. Licensed under <a href="https://github.com/DailenG/omartfy/blob/main/LICENSE">MIT</a>.</p>
+    <p class="fine-print">The ntfy mask is an Apache-2.0-licensed asset from the ntfy project; attribution is preserved in the repository.</p>
+  </footer>
+</body>
+</html>

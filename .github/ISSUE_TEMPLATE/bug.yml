@@ -1,0 +1,64 @@
+name: Bug report
+description: Report a reproducible Omartfy problem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include ntfy tokens, passwords, private topic names, or unsanitized notification content. Report security vulnerabilities privately through the repository Security tab.
+  - type: input
+    id: version
+    attributes:
+      label: Omartfy version
+      placeholder: "1.2.2"
+    validations:
+      required: true
+  - type: input
+    id: omarchy
+    attributes:
+      label: Omarchy version or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: server
+    attributes:
+      label: ntfy server type
+      options:
+        - ntfy.sh
+        - Self-hosted
+        - Both
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Describe the observed and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Open …
+        2. Press …
+        3. Observe …
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      description: Remove credentials, private URLs, topics, and notification content.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials and private notification data from this report.
+          required: true
+        - label: This is not an undisclosed security vulnerability.
+          required: true
