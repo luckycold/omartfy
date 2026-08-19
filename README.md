@@ -81,7 +81,7 @@ Review topic access controls and publisher trust before enabling a server or HTT
 ## Remove
 
 ```bash
-omarchy plugin remove omartfy.ntfy
+omarchy plugin remove dailen.omartfy
 ```
 
 Removal leaves configuration and local notification history in place so reinstalling does not lose state. To remove that data too, after removing the plugin run:

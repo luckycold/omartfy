@@ -9,7 +9,7 @@ import "components"
 
 Panel {
   id: root
-  moduleName: "omartfy.ntfy"
+  moduleName: "dailen.omartfy"
   manageIpc: false
 
   property var anchorItem: null

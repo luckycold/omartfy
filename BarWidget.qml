@@ -7,10 +7,10 @@ import "Model.js" as Model
 
 BarWidget {
   id: root
-  moduleName: "omartfy.ntfy"
+  moduleName: "dailen.omartfy"
 
   readonly property var ntfyService: bar && bar.shell
-    ? bar.shell.serviceFor("omartfy.ntfy") : null
+    ? bar.shell.serviceFor("dailen.omartfy") : null
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
   readonly property bool popoutSwitchClosing: panelLoader.item
     ? panelLoader.item.popoutSwitchClosing === true : false
