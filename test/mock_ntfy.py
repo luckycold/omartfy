@@ -145,6 +145,10 @@ class MockNtfyHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close" if poll else "keep-alive")
         self.end_headers()
+        if self.server.buffered_stream and not poll:
+            time.sleep(1)
+            self.close_connection = True
+            return
         self.write_event({"event": "open", "id": secrets.token_hex(6), "time": int(time.time())})
         for event in cached:
             self.write_event(event)
@@ -238,8 +242,10 @@ class MockNtfyServer(ThreadingHTTPServer):
     block_on_close = False
     allow_reuse_address = True
 
-    def __init__(self, address: tuple[str, int], name: str = "Mock", token: str = "") -> None:
+    def __init__(self, address: tuple[str, int], name: str = "Mock", token: str = "",
+                 buffered_stream: bool = False) -> None:
         self.state = MockState(name, token)
+        self.buffered_stream = buffered_stream
         super().__init__(address, MockNtfyHandler)
 
 

@@ -17,9 +17,19 @@ Item {
   property string pendingDelete: ""
   property string resultText: ""
   property bool deleteConfirmation: false
+  property bool addingServer: false
 
   signal done()
   signal serverDeleted(string serverId)
+
+  function selectSavedServer() {
+    if (!root.visible || root.addingServer || root.editingId || root.servers.length === 0) return
+    root.editServer(root.servers[0])
+  }
+
+  onVisibleChanged: Qt.callLater(root.selectSavedServer)
+  onServersChanged: Qt.callLater(root.selectSavedServer)
+  Component.onCompleted: Qt.callLater(root.selectSavedServer)
 
   function topics() {
     return topicsField.text.split(",").map(function(value) { return value.trim() })
@@ -80,6 +90,7 @@ Item {
   }
 
   function resetForm() {
+    root.addingServer = false
     root.editingId = ""
     labelField.text = ""
     baseUrlField.text = "https://ntfy.sh"
@@ -94,7 +105,13 @@ Item {
     root.deleteConfirmation = false
   }
 
+  function beginAdd() {
+    root.resetForm()
+    root.addingServer = true
+  }
+
   function editServer(server) {
+    root.addingServer = false
     root.editingId = String(server.id || "")
     labelField.text = String(server.label || "")
     baseUrlField.text = String(server.baseUrl || "")
@@ -135,6 +152,7 @@ Item {
           root.pendingSave = ""
           root.resultText = "Saved"
           root.editingId = String((result.server || {}).id || root.editingId)
+          root.addingServer = false
           secretField.text = ""
         }
       } else {
@@ -189,7 +207,7 @@ Item {
 
         Button {
           text: "Add"
-          onClicked: root.resetForm()
+          onClicked: root.beginAdd()
         }
       }
 

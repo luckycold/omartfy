@@ -34,6 +34,8 @@ MAX_DISMISSED = 200
 MAX_MEDIA_FILE = 5 * 1024 * 1024
 MAX_MEDIA_CACHE = 50 * 1024 * 1024
 MAX_IMAGE_DIMENSION = 4096
+STREAM_TIMEOUT_SECONDS = 10
+POLL_INTERVAL_SECONDS = 10
 HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}
 FORBIDDEN_ACTION_HEADERS = {"host", "content-length", "transfer-encoding", "connection"}
 QML_ROW_KEYS = (
@@ -379,12 +381,14 @@ def image_info(data: bytes) -> tuple[str, int, int]:
 class SubscriptionWorker(threading.Thread):
     def __init__(self, bridge: "Bridge", server: dict[str, Any],
                  bootstrap_topics: list[str] | None = None,
-                 cursor_override: str | None = None) -> None:
+                 cursor_override: str | None = None,
+                 bootstrap_advance_cursor: bool = False) -> None:
         super().__init__(name=f"ntfy-{server['id']}", daemon=True)
         self.bridge = bridge
         self.server = server
         self.bootstrap_topics = list(bootstrap_topics or [])
         self.cursor_override = cursor_override
+        self.bootstrap_advance_cursor = bootstrap_advance_cursor
         self.stop_event = threading.Event()
         self.response: Any = None
         self.response_lock = threading.Lock()
@@ -404,7 +408,7 @@ class SubscriptionWorker(threading.Thread):
         authorization = authorization_header(self.server)
         if authorization:
             request.add_header("Authorization", authorization)
-        return self.bridge.urlopen(request, timeout=10 if poll else 65)
+        return self.bridge.urlopen(request, timeout=10 if poll else STREAM_TIMEOUT_SECONDS)
 
     def _consume(self, response: Any, advance_cursor: bool) -> None:
         while not self.stop_event.is_set() and not self.bridge.stop_event.is_set():
@@ -427,25 +431,36 @@ class SubscriptionWorker(threading.Thread):
         if self.bootstrap_topics and not self.stop_event.is_set():
             try:
                 with self._open(self.bootstrap_topics, "all", True) as response:
-                    self._consume(response, advance_cursor=False)
+                    self.bridge.set_server_status(server_id, "connected", "")
+                    self._consume(response, advance_cursor=self.bootstrap_advance_cursor)
+            except urllib.error.HTTPError as error:
+                error.close()
+                if error.code in {401, 403}:
+                    self.bridge.set_server_status(server_id, "auth-error", "Authentication failed")
+                    return
+                self.bridge.emit({"event": "error", "fatal": False,
+                                  "message": f"Could not load topics: HTTP {error.code}"})
             except Exception as error:
                 self.bridge.emit({"event": "error", "fatal": False,
-                                  "message": self.bridge.safe_error(error, "Could not load added topics")})
+                                  "message": self.bridge.safe_error(error, "Could not load topics")})
 
         delays = [1, 2, 4, 8, 16]
         attempt = 0
+        poll_mode = False
         while not self.stop_event.is_set() and not self.bridge.stop_event.is_set():
-            self.bridge.set_server_status(server_id, "connecting", "")
+            if not poll_mode:
+                self.bridge.set_server_status(server_id, "connecting", "")
             with self.bridge.state_lock:
                 cursor = self.cursor_override
                 if cursor is None:
                     cursor = str(self.bridge.server_state(server_id).get("cursor") or "all")
                 self.cursor_override = None
             try:
-                response = self._open(self.server["topics"], cursor or "all", False)
+                response = self._open(self.server["topics"], cursor or "all", poll_mode)
                 with self.response_lock:
                     self.response = response
                 attempt = 0
+                self.bridge.set_server_status(server_id, "connected", "")
                 try:
                     self._consume(response, advance_cursor=True)
                 finally:
@@ -454,6 +469,9 @@ class SubscriptionWorker(threading.Thread):
                         self.response = None
                 if self.stop_event.is_set() or self.bridge.stop_event.is_set():
                     return
+                if poll_mode:
+                    self.stop_event.wait(POLL_INTERVAL_SECONDS)
+                    continue
                 raise EOFError("ntfy stream closed")
             except urllib.error.HTTPError as error:
                 with self.response_lock:
@@ -474,6 +492,17 @@ class SubscriptionWorker(threading.Thread):
                     delay = delays[min(attempt, len(delays) - 1)] if attempt < len(delays) else 30
                     attempt += 1
                 message = f"HTTP {error.code}"
+            except TimeoutError as error:
+                with self.response_lock:
+                    self.response = None
+                if self.stop_event.is_set() or self.bridge.stop_event.is_set():
+                    return
+                if not poll_mode:
+                    poll_mode = True
+                    continue
+                delay = delays[min(attempt, len(delays) - 1)] if attempt < len(delays) else 30
+                attempt += 1
+                message = self.bridge.safe_error(error, "Polling timed out")
             except Exception as error:
                 with self.response_lock:
                     self.response = None
@@ -660,6 +689,9 @@ class Bridge:
             state = self.server_state(server_id)
             recent = state["recentIds"]
             if event_id and event_id in recent:
+                if advance_cursor:
+                    state["cursor"] = event_id
+                    self.persist_state()
                 return
             if event_type == "message":
                 try:
@@ -754,11 +786,14 @@ class Bridge:
             worker.join(timeout=3)
 
     def start_worker(self, server: dict[str, Any], bootstrap_topics: list[str] | None = None,
-                     cursor_override: str | None = None) -> None:
+                     cursor_override: str | None = None,
+                     bootstrap_advance_cursor: bool = False) -> None:
         if not server["enabled"]:
             self.set_server_status(server["id"], "disabled", "")
             return
-        worker = SubscriptionWorker(self, dict(server), bootstrap_topics, cursor_override)
+        worker = SubscriptionWorker(
+            self, dict(server), bootstrap_topics, cursor_override, bootstrap_advance_cursor
+        )
         with self.workers_lock:
             self.workers[server["id"]] = worker
         worker.start()
@@ -769,7 +804,11 @@ class Bridge:
                        "message": "Malformed ntfy configuration: " + self.config_error})
             return
         for server in self.config["servers"]:
-            self.start_worker(server)
+            with self.state_lock:
+                cursor = str(self.server_state(server["id"]).get("cursor") or "")
+            bootstrap_topics = list(server["topics"]) if server["enabled"] and not cursor else []
+            self.start_worker(server, bootstrap_topics,
+                              bootstrap_advance_cursor=bool(bootstrap_topics))
 
     def remove_media_for_rows(self, rows: list[dict[str, Any]]) -> None:
         for row in rows:
@@ -808,6 +847,7 @@ class Bridge:
 
             cursor = ""
             added_topics: list[str] = []
+            bootstrap_advance_cursor = False
             self.stop_worker(normalized["id"])
             with self.state_lock:
                 state = self.server_state(normalized["id"])
@@ -833,6 +873,9 @@ class Bridge:
                         added_topics = [topic for topic in normalized["topics"] if topic not in existing["topics"]]
                         for row in state["notifications"].values():
                             row["serverLabel"] = normalized["label"]
+                if not cursor and not added_topics:
+                    added_topics = list(normalized["topics"])
+                bootstrap_advance_cursor = bool(added_topics and not cursor)
                 self.config = next_config
                 atomic_json_write(self.config_path, self.config)
                 self.persist_state()
@@ -840,7 +883,8 @@ class Bridge:
             self.emit({"event": "config_result", "requestId": request_id, "operation": "save",
                        "ok": True, "server": public_server(normalized), "deletedServerId": "", "error": ""})
             self.emit(self.snapshot())
-            self.start_worker(normalized, added_topics, cursor if added_topics else None)
+            self.start_worker(normalized, added_topics, cursor if added_topics else None,
+                              bootstrap_advance_cursor)
         except (ConfigError, OSError) as error:
             self.emit({"event": "config_result", "requestId": request_id, "operation": "save",
                        "ok": False, "server": {}, "deletedServerId": "",

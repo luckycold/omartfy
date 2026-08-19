@@ -40,8 +40,10 @@ def wait_until(predicate, timeout=4.0):
 
 
 class RunningServer:
-    def __init__(self, token=""):
-        self.server = MockNtfyServer(("127.0.0.1", 0), "Test", token)
+    def __init__(self, token="", buffered_stream=False):
+        self.server = MockNtfyServer(
+            ("127.0.0.1", 0), "Test", token, buffered_stream=buffered_stream
+        )
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     @property
@@ -147,7 +149,7 @@ class BridgeCase(unittest.TestCase):
         bridge.apply_event(server["id"], bootstrap, advance_cursor=False)
         self.assertEqual(bridge.server_state(server["id"])["cursor"], "event-two")
         bridge.apply_event(server["id"], bootstrap, advance_cursor=True)
-        self.assertEqual(bridge.server_state(server["id"])["cursor"], "event-two")
+        self.assertEqual(bridge.server_state(server["id"])["cursor"], "added-topic")
 
         bridge.apply_event(server["id"], {"event": "message_clear", "id": "clear-id", "topic": "alerts", "sequence_id": "sequence"})
         self.assertNotIn(key, bridge.server_state(server["id"])["notifications"])
@@ -197,6 +199,38 @@ class BridgeCase(unittest.TestCase):
             other.start_all()
             self.assertTrue(wait_until(lambda: other.statuses.get(wrong["id"], {}).get("state") == "auth-error"))
             self.assertNotIn("wrong", self.output.getvalue())
+
+    def test_buffered_stream_bootstraps_and_falls_back_to_polling(self):
+        old_timeout = bridge_module.STREAM_TIMEOUT_SECONDS
+        old_interval = bridge_module.POLL_INTERVAL_SECONDS
+        bridge_module.STREAM_TIMEOUT_SECONDS = 0.1
+        bridge_module.POLL_INTERVAL_SECONDS = 0.05
+        try:
+            with RunningServer(buffered_stream=True) as buffered:
+                buffered.server.state.emit({
+                    "event": "message", "id": "cached-event", "topic": "alerts",
+                    "message": "cached",
+                })
+                server = normalize_server({
+                    "label": "Buffered", "baseUrl": buffered.url, "topics": ["alerts"],
+                })
+                bridge = self.make_bridge({"version": 1, "servers": [server]})
+                bridge.start_all()
+                self.assertTrue(wait_until(
+                    lambda: bridge.server_state(server["id"]).get("cursor") == "cached-event"
+                ))
+
+                buffered.server.state.emit({
+                    "event": "message", "id": "polled-event", "topic": "alerts",
+                    "message": "polled",
+                })
+                self.assertTrue(wait_until(
+                    lambda: any(row["id"] == "polled-event" for row in bridge.all_rows())
+                ))
+                self.assertEqual(bridge.statuses[server["id"]]["state"], "connected")
+        finally:
+            bridge_module.STREAM_TIMEOUT_SECONDS = old_timeout
+            bridge_module.POLL_INTERVAL_SECONDS = old_interval
 
     def test_http_action_gating_default_post_and_correlated_results(self):
         with RunningServer() as target:
