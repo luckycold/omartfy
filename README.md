@@ -1,8 +1,8 @@
-# Omartify
+# Omartfy
 
-A multi-server [ntfy](https://ntfy.sh/) client for the Omarchy bar. Omartify combines notifications from ntfy.sh and self-hosted servers into one keyboard-friendly panel while keeping each server's authentication, connection state, and unread count separate.
+A multi-server [ntfy](https://ntfy.sh/) client for the Omarchy bar. Omartfy combines notifications from ntfy.sh and self-hosted servers into one keyboard-friendly panel while keeping each server's authentication, connection state, and unread count separate.
 
-![Omartify notification panel](preview.png)
+![Omartfy notification panel](preview.png)
 
 ## Features
 
@@ -29,7 +29,7 @@ No pip, npm, third-party ntfy SDK, SSE, or WebSocket package is required.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/DailenG/omartify --enable
+omarchy plugin add https://github.com/DailenG/omartfy --enable
 ```
 
 The widget defaults to the right bar section. Open the panel and select **Settings** to add an ntfy server and one or more comma-separated topics. No default subscription is created because ntfy topics act as public addresses unless protected by server-side access controls.
@@ -64,7 +64,7 @@ A blank secret while editing an existing profile preserves the stored secret.
 
 ## Data and security
 
-Omarchy plugins run unsandboxed with the current user's permissions. Omartify:
+Omarchy plugins run unsandboxed with the current user's permissions. Omartfy:
 
 - Reads configuration from `${XDG_CONFIG_HOME:-~/.config}/omarchy/ntfy.json`
 - Stores cursor, notification, dismissal, and media state under `${XDG_STATE_HOME:-~/.local/state}/omarchy/ntfy/`
@@ -81,7 +81,7 @@ Review topic access controls and publisher trust before enabling a server or HTT
 ## Remove
 
 ```bash
-omarchy plugin remove omartify.ntfy
+omarchy plugin remove omartfy.ntfy
 ```
 
 Removal leaves configuration and local notification history in place so reinstalling does not lose state. To remove that data too, after removing the plugin run:
@@ -104,6 +104,6 @@ omarchy plugin validate "$PWD"
 
 ## License
 
-Omartify is licensed under the [MIT License](LICENSE).
+Omartfy is licensed under the [MIT License](LICENSE).
 
 The ntfy mask in `assets/ntfy-mask.svg` is copied from ntfy commit `4c2b69e0591b51d7ed7b2e71954f0f7be936b47f` and remains licensed under Apache-2.0. Its attribution and license text are preserved in the asset and `third_party/ntfy-APACHE-2.0.txt`.
