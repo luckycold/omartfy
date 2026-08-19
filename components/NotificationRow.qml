@@ -27,6 +27,7 @@ CursorSurface {
   readonly property var priority: Model.priorityMeta(notification.priority)
   readonly property var attachment: notification.attachment || ({})
   readonly property bool hasAttachment: !!attachment.url
+  readonly property var notificationActions: notification.actions || []
   readonly property bool attachmentExpired: Number(attachment.expires || notification.expires || 0) > 0
     && Number(attachment.expires || notification.expires) <= Math.floor(Date.now() / 1000)
   readonly property var iconMediaState: service
@@ -268,11 +269,20 @@ CursorSurface {
         }
       }
 
+      Text {
+        visible: root.notificationActions.length > 0
+        text: "Actions"
+        color: Util.alpha(root.foreground, 0.68)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: true
+      }
+
       Repeater {
-        model: Array.isArray(root.notification.actions) ? root.notification.actions : []
+        model: root.notificationActions
         delegate: Column {
           required property var modelData
-          width: body.width
+          width: parent.width
           spacing: Style.space(2)
           readonly property var actionState: root.service
             ? root.service.actionState(root.notification.notificationKey, modelData.id)
