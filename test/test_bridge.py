@@ -385,6 +385,66 @@ class BridgeCase(unittest.TestCase):
         self.assertEqual(bridge.config["toasts"], result["settings"])
         self.assertEqual(stat.S_IMODE(self.config_path.stat().st_mode), 0o600)
 
+    def test_batch_action_config_protocol_and_persistence(self):
+        defaults = validate_config({"version": 1, "servers": []})
+        self.assertEqual(defaults["batchAction"], "delete_all")
+        custom = validate_config({"version": 1, "batchAction": "read_all", "servers": []})
+        self.assertEqual(custom["batchAction"], "read_all")
+
+        for invalid in (
+            {"version": 1, "servers": [], "batchAction": 123},
+            {"version": 1, "servers": [], "batchAction": "invalid_action"},
+            {"version": 1, "servers": [], "batchAction": []},
+        ):
+            with self.assertRaises(ConfigError):
+                validate_config(invalid)
+
+        server = normalize_server({
+            "label": "Home", "baseUrl": "https://example.com", "topics": ["alerts"],
+            "enabled": False,
+        })
+        bridge = self.make_bridge({
+            "version": 1,
+            "batchAction": "read_all",
+            "servers": [server],
+        })
+        self.assertEqual(bridge.snapshot()["batchAction"], "read_all")
+
+        candidate = {
+            "label": "Second", "baseUrl": "https://second.example.com",
+            "topics": ["news"], "enabled": False,
+        }
+        bridge.save_server("srv-save", candidate)
+        saved_id = next(
+            event["server"]["id"] for event in self.events()
+            if event.get("requestId") == "srv-save" and event["ok"]
+        )
+        self.assertEqual(
+            json.loads(self.config_path.read_text())["batchAction"], "read_all"
+        )
+        bridge.delete_server("srv-del", saved_id)
+        self.assertEqual(
+            json.loads(self.config_path.read_text())["batchAction"], "read_all"
+        )
+
+        bridge.handle_command({
+            "cmd": "save_batch_action", "requestId": "act-save",
+            "batchAction": "delete_all",
+        })
+        result = next(event for event in self.events() if event.get("requestId") == "act-save")
+        self.assertEqual(result, {
+            "event": "config_result", "requestId": "act-save",
+            "operation": "save_batch_action", "ok": True,
+            "batchAction": "delete_all",
+            "server": {}, "deletedServerId": "", "error": "",
+        })
+        self.assertEqual(bridge.config["batchAction"], "delete_all")
+
+        bridge.save_batch_action("act-bad", "invalid_mode")
+        bad = next(event for event in self.events() if event.get("requestId") == "act-bad")
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bridge.config["batchAction"], "delete_all")
+
     def test_toasts_only_dispatch_for_new_live_unsuppressed_messages(self):
         sent = []
         server = normalize_server({
@@ -558,6 +618,7 @@ class BridgeCase(unittest.TestCase):
         malformed.save_toast_settings("no-toast-overwrite", {
             "enabled": True, "duration": "8-seconds",
         })
+        malformed.save_batch_action("no-batch-overwrite", "read_all")
         self.assertEqual(malformed_path.read_text(encoding="utf-8"), "{bad")
 
     def test_json_lines_subprocess_correlates_commands_and_exits_zero(self):

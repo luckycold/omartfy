@@ -39,6 +39,7 @@ STREAM_TIMEOUT_SECONDS = 10
 POLL_INTERVAL_SECONDS = 10
 HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}
 FORBIDDEN_ACTION_HEADERS = {"host", "content-length", "transfer-encoding", "connection"}
+BATCH_ACTIONS = {"delete_all", "read_all"}
 TOAST_DURATIONS = {"default", "8-seconds", "15-seconds", "30-seconds", "until-dismissed"}
 QML_ROW_KEYS = (
     "notificationKey", "serverId", "serverLabel", "id", "effectiveSequence",
@@ -131,6 +132,12 @@ def normalize_toast_settings(candidate: Any) -> dict[str, Any]:
     return {"enabled": enabled, "duration": duration}
 
 
+def normalize_batch_action(candidate: Any) -> str:
+    if not isinstance(candidate, str) or candidate not in BATCH_ACTIONS:
+        raise ConfigError("Batch action must be delete_all or read_all")
+    return candidate
+
+
 def normalize_server(candidate: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
     if not isinstance(candidate, dict):
         raise ConfigError("Server profile must be an object")
@@ -210,6 +217,7 @@ def validate_config(raw: Any) -> dict[str, Any]:
     toast_settings = normalize_toast_settings(raw["toasts"]) if "toasts" in raw else {
         "enabled": False, "duration": "default"
     }
+    batch_action = normalize_batch_action(raw.get("batchAction", "delete_all"))
     servers: list[dict[str, Any]] = []
     ids: set[str] = set()
     labels: set[str] = set()
@@ -223,9 +231,12 @@ def validate_config(raw: Any) -> dict[str, Any]:
         labels.add(folded)
         ids.add(server["id"])
         servers.append(server)
-    return {"version": 1, "toasts": toast_settings, "servers": servers}
-
-
+    return {
+        "version": 1,
+        "toasts": toast_settings,
+        "batchAction": batch_action,
+        "servers": servers,
+    }
 def public_server(server: dict[str, Any], state: str = "disabled", error: str = "") -> dict[str, Any]:
     auth = server.get("auth") or {}
     return {
@@ -576,15 +587,24 @@ class Bridge:
 
     def load_config(self) -> dict[str, Any]:
         if not self.config_path.exists():
-            return {"version": 1, "toasts": {"enabled": False, "duration": "default"}, "servers": []}
+            return {
+                "version": 1,
+                "toasts": {"enabled": False, "duration": "default"},
+                "batchAction": "delete_all",
+                "servers": [],
+            }
         try:
             with self.config_path.open("r", encoding="utf-8") as handle:
                 return validate_config(json.load(handle))
         except (OSError, json.JSONDecodeError, ConfigError) as error:
             self.config_malformed = True
             self.config_error = bounded_text(error)
-            return {"version": 1, "toasts": {"enabled": False, "duration": "default"}, "servers": []}
-
+            return {
+                "version": 1,
+                "toasts": {"enabled": False, "duration": "default"},
+                "batchAction": "delete_all",
+                "servers": [],
+            }
     def load_state(self) -> dict[str, Any]:
         empty = {"version": 1, "muteUntil": 0, "servers": {}}
         if not self.state_path.exists():
@@ -763,6 +783,7 @@ class Bridge:
             "servers": servers,
             "notifications": self.all_rows(),
             "toastSettings": dict(self.config["toasts"]),
+            "batchAction": str(self.config.get("batchAction", "delete_all")),
             "muteUntil": self.current_mute_until(),
         }
 
@@ -1011,6 +1032,7 @@ class Bridge:
             next_config = {
                 "version": 1,
                 "toasts": dict(self.config["toasts"]),
+                "batchAction": str(self.config.get("batchAction", "delete_all")),
                 "servers": next_servers,
             }
 
@@ -1073,6 +1095,7 @@ class Bridge:
                 next_config = {
                     "version": 1,
                     "toasts": settings,
+                    "batchAction": str(self.config.get("batchAction", "delete_all")),
                     "servers": self.config["servers"],
                 }
                 atomic_json_write(self.config_path, next_config)
@@ -1088,6 +1111,39 @@ class Bridge:
                 "event": "config_result", "requestId": request_id, "operation": "save_toasts",
                 "ok": False, "settings": {}, "server": {}, "deletedServerId": "",
                 "error": self.safe_error(error, "Could not save notification settings"),
+            })
+
+
+    def save_batch_action(self, request_id: str, candidate: Any) -> None:
+        if self.config_malformed:
+            self.emit({
+                "event": "config_result", "requestId": request_id, "operation": "save_batch_action",
+                "ok": False, "batchAction": "delete_all", "server": {}, "deletedServerId": "",
+                "error": "Malformed configuration must be fixed outside the editor",
+            })
+            return
+        try:
+            action = normalize_batch_action(candidate)
+            with self.state_lock:
+                next_config = {
+                    "version": 1,
+                    "toasts": dict(self.config["toasts"]),
+                    "batchAction": action,
+                    "servers": self.config["servers"],
+                }
+                atomic_json_write(self.config_path, next_config)
+                self.config = next_config
+            self.emit({
+                "event": "config_result", "requestId": request_id, "operation": "save_batch_action",
+                "ok": True, "batchAction": action, "server": {}, "deletedServerId": "",
+                "error": "",
+            })
+            self.emit(self.snapshot())
+        except (ConfigError, OSError) as error:
+            self.emit({
+                "event": "config_result", "requestId": request_id, "operation": "save_batch_action",
+                "ok": False, "batchAction": "delete_all", "server": {}, "deletedServerId": "",
+                "error": self.safe_error(error, "Could not save header action setting"),
             })
 
 
@@ -1112,6 +1168,7 @@ class Bridge:
                 self.config = {
                     "version": 1,
                     "toasts": dict(self.config["toasts"]),
+                    "batchAction": str(self.config.get("batchAction", "delete_all")),
                     "servers": [
                         item for item in self.config["servers"] if item["id"] != server_id
                     ],
@@ -1441,6 +1498,8 @@ class Bridge:
                              str(command.get("kind") or ""))
         elif name == "save_server":
             self.save_server(request_id, command.get("server"))
+        elif name == "save_batch_action":
+            self.save_batch_action(request_id, command.get("batchAction"))
         elif name == "save_toast_settings":
             self.save_toast_settings(request_id, command.get("settings"))
         elif name == "delete_server":

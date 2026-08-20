@@ -16,12 +16,17 @@ Item {
   property string pendingTest: ""
   property string pendingDelete: ""
   property string pendingToastSave: ""
+  property string pendingBatchActionSave: ""
   property string resultText: ""
   property string toastResultText: ""
+  property string batchActionResultText: ""
   property bool deleteConfirmation: false
   property bool addingServer: false
   readonly property var toastDurationValues: [
     "default", "8-seconds", "15-seconds", "30-seconds", "until-dismissed"
+  ]
+  readonly property var batchActionValues: [
+    "delete_all", "read_all"
   ]
 
   signal done()
@@ -36,11 +41,13 @@ Item {
   onVisibleChanged: {
     Qt.callLater(root.selectSavedServer)
     Qt.callLater(root.loadToastSettings)
+    Qt.callLater(root.loadBatchAction)
   }
   onServersChanged: Qt.callLater(root.selectSavedServer)
   Component.onCompleted: {
     Qt.callLater(root.selectSavedServer)
     Qt.callLater(root.loadToastSettings)
+    Qt.callLater(root.loadBatchAction)
   }
 
   function loadToastSettings() {
@@ -58,6 +65,20 @@ Item {
       enabled: nativeToastsCheck.checked,
       duration: root.toastDurationValues[toastDurationBox.currentIndex] || "default"
     })
+  }
+
+  function loadBatchAction() {
+    var action = root.service ? root.service.batchAction : "delete_all"
+    var index = root.batchActionValues.indexOf(action)
+    batchActionBox.currentIndex = index >= 0 ? index : 0
+  }
+
+  function saveBatchAction() {
+    if (!root.service || root.pendingBatchActionSave) return
+    root.batchActionResultText = ""
+    root.pendingBatchActionSave = root.service.saveBatchAction(
+      root.batchActionValues[batchActionBox.currentIndex] || "delete_all"
+    )
   }
 
   function topics() {
@@ -177,6 +198,10 @@ Item {
     function onToastSettingsChanged() {
       root.loadToastSettings()
     }
+    function onBatchActionChanged() {
+      root.loadBatchAction()
+    }
+
 
     function onConfigCompleted(result) {
       if (result.requestId === root.pendingToastSave && result.operation === "save_toasts") {
@@ -184,6 +209,13 @@ Item {
         root.toastResultText = result.ok
           ? "Saved"
           : String(result.error || "Could not save notification settings")
+        return
+      }
+      if (result.requestId === root.pendingBatchActionSave && result.operation === "save_batch_action") {
+        root.pendingBatchActionSave = ""
+        root.batchActionResultText = result.ok
+          ? "Saved"
+          : String(result.error || "Could not save header action setting")
         return
       }
       if (result.requestId !== root.pendingSave && result.requestId !== root.pendingDelete) return
@@ -322,6 +354,66 @@ Item {
         }
       }
 
+      PanelSeparator { width: parent.width }
+
+      Column {
+        width: parent.width
+        spacing: Style.space(7)
+
+        Text {
+          text: "Header action"
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+        }
+
+        Row {
+          spacing: Style.space(8)
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Action button"
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          ComboBox {
+            id: batchActionBox
+            model: [
+              "Delete all",
+              "Read all"
+            ]
+          }
+        }
+
+        Button {
+          text: root.pendingBatchActionSave ? "Saving…" : "Save header action"
+          enabled: !!root.service && !root.pendingBatchActionSave
+          onClicked: root.saveBatchAction()
+        }
+
+        Text {
+          width: parent.width
+          visible: root.batchActionResultText.length > 0
+          text: root.batchActionResultText
+          color: root.batchActionResultText === "Saved" ? Color.accent : root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+        }
+
+        Text {
+          width: parent.width
+          text: "Controls whether the panel header button deletes all notifications in the active view (with confirmation) or marks them all as read."
+          color: root.foreground
+          opacity: 0.72
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+        }
+      }
       PanelSeparator { width: parent.width }
 
       Column {

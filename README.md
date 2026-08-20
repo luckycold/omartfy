@@ -19,6 +19,7 @@ A multi-server [ntfy](https://ntfy.sh/) client for the Omarchy bar. Omartfy comb
 - Multiple topics and credentials per server profile
 - Bearer token, Basic, and unauthenticated connections
 - Local read, delete, and clear state without publishing changes to ntfy
+- Configurable header action to delete all notifications in the active view (with confirmation) or mark them all as read
 - ntfy view, copy, and opt-in HTTP actions in an ntfy-style action row
 - Timed or indefinite DND from the bar context menu
 - Opt-in native Omarchy desktop toasts with global, per-server, duration, DND, and click-to-open controls
@@ -84,6 +85,13 @@ Native Omarchy toasts are disabled globally after installation and updates. Enab
 Initial cached history populates the Omartfy inbox silently. New messages after the established cursor, including reconnect catch-up messages, can create native toasts. Left-clicking a toast summons the Omartfy panel on the focused monitor; right-clicking dismisses it.
 
 Omartfy DND and Omarchy's global notification DND both suppress popups while the durable Omartfy inbox continues collecting. Omarchy owns native notification history as presentation state; it is not synchronized with Omartfy read or delete state.
+
+## Header action
+
+In **Settings**, the **Header action** setting controls the panel header button:
+
+- **Delete all (default):** Clears all notifications in the active view or server tab after confirmation.
+- **Read all:** Immediately marks all unread notifications in the active view or server tab as read without removing them from the inbox.
 
 ## Keyboard controls
 

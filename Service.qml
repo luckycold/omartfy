@@ -19,6 +19,7 @@ Item {
   property var actionStates: ({})
   property var mediaStates: ({})
   property var toastSettings: ({ enabled: false, duration: "default" })
+  property string batchAction: "delete_all"
   property double muteUntil: 0
   property double nowMs: Date.now()
   readonly property bool dndActive: muteUntil < 0 || muteUntil * 1000 > nowMs
@@ -84,6 +85,7 @@ Item {
           duration: String(toastSettings.duration || "default")
         }
       : { enabled: false, duration: "default" }
+    root.batchAction = String(message.batchAction || "delete_all")
     root.nowMs = Date.now()
     root.muteUntil = Number(message.muteUntil || 0)
     root.helperReady = true
@@ -249,6 +251,10 @@ Item {
 
   function saveToastSettings(settings) {
     return root.send({ cmd: "save_toast_settings", settings: settings })
+  }
+
+  function saveBatchAction(action) {
+    return root.send({ cmd: "save_batch_action", batchAction: String(action || "delete_all") })
   }
 
   function deleteServer(serverId) {

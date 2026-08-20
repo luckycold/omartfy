@@ -251,8 +251,14 @@ Panel {
               onClicked: root.editorOpen = true
             }
             Button {
-              text: "Delete all"
-              onClicked: clearPopup.open()
+              text: root.ntfyService && root.ntfyService.batchAction === "read_all" ? "Read all" : "Delete all"
+              onClicked: {
+                if (root.ntfyService && root.ntfyService.batchAction === "read_all") {
+                  root.ntfyService.markRead(root.selectedServerId)
+                } else {
+                  clearPopup.open()
+                }
+              }
             }
           }
         }
