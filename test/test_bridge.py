@@ -516,6 +516,24 @@ class BridgeCase(unittest.TestCase):
         bridge.send_native_toast(server, row)
         errors = [event for event in self.events()
                   if event.get("message") == "Could not show desktop toast"]
+        bridge.notification_sender = sent.append
+        malicious_row = bridge.normalize_message(server["id"], {
+            "event": "message", "id": "inject", "topic": "alerts", "priority": 3,
+            "title": "--icon=/etc/passwd --app-name=evil",
+            "message": "--expire-time=999999 <script>alert(1)</script>",
+        })
+        bridge.send_native_toast(server, malicious_row)
+        injected = sent.pop()
+        joined = "\0".join(injected)
+        self.assertIn("--icon=/etc/passwd", joined)
+        self.assertIn("--app-name=evil", joined)
+        self.assertIn("--expire-time=999999", joined)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", joined)
+        body_arg = injected[10]
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", body_arg)
+        self.assertEqual(bridge_module.html.unescape(body_arg).splitlines()[1], "--expire-time=999999 <script>alert(1)</script>")
+        summary_arg = injected[9]
+        self.assertTrue(summary_arg.startswith(" --icon="))
         self.assertEqual(len(errors), 2)
 
     def test_save_delete_results_and_malformed_config_protection(self):

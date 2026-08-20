@@ -73,9 +73,7 @@ def default_state_dir() -> Path:
 
 
 def atomic_json_write(path: Path, value: Any, mode: int = 0o600) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.parent.name == "ntfy":
-        os.chmod(path.parent, 0o700)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -616,8 +614,12 @@ class Bridge:
             value["notifications"] = {}
         if not isinstance(value.get("recentIds"), list):
             value["recentIds"] = []
+        else:
+            del value["recentIds"][:-MAX_RECENT_IDS]
         if not isinstance(value.get("dismissed"), list):
             value["dismissed"] = []
+        else:
+            del value["dismissed"][:-MAX_DISMISSED]
         return value
 
     def persist_state(self) -> None:
@@ -1207,6 +1209,8 @@ class Bridge:
             name, value = str(raw_name), str(raw_value)
             if "\r" in name or "\n" in name or "\r" in value or "\n" in value:
                 raise ValueError("HTTP action headers cannot contain newlines")
+            if value and value[0] in " \t":
+                raise ValueError("HTTP action header values cannot start with whitespace")
             if name.lower() in FORBIDDEN_ACTION_HEADERS:
                 raise ValueError(f"HTTP action cannot set {name}")
             headers[name] = value
@@ -1348,8 +1352,7 @@ class Bridge:
             raise MediaError("Unsupported image format")
         if not width or not height or width > MAX_IMAGE_DIMENSION or height > MAX_IMAGE_DIMENSION:
             raise MediaError("Image dimensions exceed 4096×4096")
-        self.media_dir.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.state_dir, 0o700)
+        self.media_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         digest = hashlib.sha256(f"{server['id']}\0{kind}\0{source_url}".encode("utf-8")).hexdigest()
         destination = self.media_dir / f"{digest}.{image_type}"
         fd, temporary = tempfile.mkstemp(prefix=".media.", dir=self.media_dir)
