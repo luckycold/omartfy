@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import ipaddress
 import json
 import os
@@ -24,7 +25,7 @@ import urllib.request
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, BinaryIO, TextIO
+from typing import Any, BinaryIO, Callable, TextIO
 
 TOPIC_RE = re.compile(r"^[-_A-Za-z0-9]{1,64}$")
 ID_RE = re.compile(r"^[0-9a-f]{12}$")
@@ -38,6 +39,7 @@ STREAM_TIMEOUT_SECONDS = 10
 POLL_INTERVAL_SECONDS = 10
 HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}
 FORBIDDEN_ACTION_HEADERS = {"host", "content-length", "transfer-encoding", "connection"}
+TOAST_DURATIONS = {"default", "8-seconds", "15-seconds", "30-seconds", "until-dismissed"}
 QML_ROW_KEYS = (
     "notificationKey", "serverId", "serverLabel", "id", "effectiveSequence",
     "time", "expires", "topic", "message", "title", "tags", "priority",
@@ -119,6 +121,18 @@ def normalize_base_url(value: Any) -> str:
     return url
 
 
+def normalize_toast_settings(candidate: Any) -> dict[str, Any]:
+    if not isinstance(candidate, dict):
+        raise ConfigError("Toast settings must be an object")
+    enabled = candidate.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ConfigError("Toast enabled setting must be a boolean")
+    duration = candidate.get("duration", "default")
+    if not isinstance(duration, str) or duration not in TOAST_DURATIONS:
+        raise ConfigError("Unknown toast duration")
+    return {"enabled": enabled, "duration": duration}
+
+
 def normalize_server(candidate: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
     if not isinstance(candidate, dict):
         raise ConfigError("Server profile must be an object")
@@ -175,12 +189,17 @@ def normalize_server(candidate: dict[str, Any], existing: dict[str, Any] | None 
     if auth_type != "none" and parsed.scheme == "http" and not is_loopback_host(parsed.hostname) and not allow_insecure:
         raise ConfigError("Credentials over non-loopback HTTP require explicit acknowledgment")
 
+    show_toasts = candidate.get("showToasts", True)
+    if not isinstance(show_toasts, bool):
+        raise ConfigError("Show toasts setting must be a boolean")
+
     return {
         "id": server_id,
         "label": label,
         "baseUrl": base_url,
         "topics": topics,
         "enabled": bool(candidate.get("enabled", True)),
+        "showToasts": show_toasts,
         "allowHttpActions": bool(candidate.get("allowHttpActions", False)),
         "allowInsecureHttp": allow_insecure,
         "auth": {"type": auth_type, "username": username, "secret": secret},
@@ -190,6 +209,9 @@ def normalize_server(candidate: dict[str, Any], existing: dict[str, Any] | None 
 def validate_config(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict) or raw.get("version") != 1 or not isinstance(raw.get("servers"), list):
         raise ConfigError("Configuration must have version 1 and a servers array")
+    toast_settings = normalize_toast_settings(raw["toasts"]) if "toasts" in raw else {
+        "enabled": False, "duration": "default"
+    }
     servers: list[dict[str, Any]] = []
     ids: set[str] = set()
     labels: set[str] = set()
@@ -203,7 +225,7 @@ def validate_config(raw: Any) -> dict[str, Any]:
         labels.add(folded)
         ids.add(server["id"])
         servers.append(server)
-    return {"version": 1, "servers": servers}
+    return {"version": 1, "toasts": toast_settings, "servers": servers}
 
 
 def public_server(server: dict[str, Any], state: str = "disabled", error: str = "") -> dict[str, Any]:
@@ -215,6 +237,7 @@ def public_server(server: dict[str, Any], state: str = "disabled", error: str = 
         "topics": list(server["topics"]),
         "enabled": bool(server["enabled"]),
         "allowHttpActions": bool(server["allowHttpActions"]),
+        "showToasts": bool(server["showToasts"]),
         "allowInsecureHttp": bool(server["allowInsecureHttp"]),
         "auth": {
             "type": str(auth.get("type") or "none"),
@@ -417,7 +440,7 @@ class SubscriptionWorker(threading.Thread):
             request.add_header("Authorization", authorization)
         return self.bridge.urlopen(request, timeout=10 if poll else STREAM_TIMEOUT_SECONDS)
 
-    def _consume(self, response: Any, advance_cursor: bool) -> None:
+    def _consume(self, response: Any, advance_cursor: bool, show_toast: bool) -> None:
         while not self.stop_event.is_set() and not self.bridge.stop_event.is_set():
             line = response.readline()
             if not line:
@@ -431,7 +454,9 @@ class SubscriptionWorker(threading.Thread):
                 continue
             if event.get("event") == "open":
                 self.bridge.set_server_status(self.server["id"], "connected", "")
-            self.bridge.apply_event(self.server["id"], event, advance_cursor=advance_cursor)
+            self.bridge.apply_event(
+                self.server["id"], event, advance_cursor=advance_cursor, show_toast=show_toast
+            )
 
     def run(self) -> None:
         server_id = self.server["id"]
@@ -439,7 +464,9 @@ class SubscriptionWorker(threading.Thread):
             try:
                 with self._open(self.bootstrap_topics, "all", True) as response:
                     self.bridge.set_server_status(server_id, "connected", "")
-                    self._consume(response, advance_cursor=self.bootstrap_advance_cursor)
+                    self._consume(
+                        response, advance_cursor=self.bootstrap_advance_cursor, show_toast=False
+                    )
             except urllib.error.HTTPError as error:
                 error.close()
                 if error.code in {401, 403}:
@@ -469,7 +496,7 @@ class SubscriptionWorker(threading.Thread):
                 attempt = 0
                 self.bridge.set_server_status(server_id, "connected", "")
                 try:
-                    self._consume(response, advance_cursor=True)
+                    self._consume(response, advance_cursor=True, show_toast=True)
                 finally:
                     response.close()
                     with self.response_lock:
@@ -525,21 +552,25 @@ class SubscriptionWorker(threading.Thread):
 
 class Bridge:
     def __init__(self, config_path: Path | None = None, state_dir: Path | None = None,
-                 output: TextIO | None = None, urlopen: Any = None) -> None:
+                 output: TextIO | None = None, urlopen: Any = None,
+                 notification_sender: Callable[[list[str]], None] | None = None) -> None:
         self.config_path = Path(config_path or default_config_path())
         self.state_dir = Path(state_dir or default_state_dir())
         self.state_path = self.state_dir / "state.json"
         self.media_dir = self.state_dir / "media"
         self.output = output or sys.stdout
         self.urlopen = urlopen or urllib.request.urlopen
+        self.notification_sender = notification_sender or self._run_notification_sender
         self.stdout_lock = threading.Lock()
         self.state_lock = threading.RLock()
         self.workers_lock = threading.Lock()
+        self.toast_lock = threading.Lock()
         self.stop_event = threading.Event()
         self.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ntfy-task")
         self.workers: dict[str, SubscriptionWorker] = {}
         self.statuses: dict[str, dict[str, str]] = {}
         self.inflight_actions: set[tuple[str, str]] = set()
+        self.toast_error_active = False
         self.config_malformed = False
         self.config_error = ""
         self.config = self.load_config()
@@ -547,14 +578,14 @@ class Bridge:
 
     def load_config(self) -> dict[str, Any]:
         if not self.config_path.exists():
-            return {"version": 1, "servers": []}
+            return {"version": 1, "toasts": {"enabled": False, "duration": "default"}, "servers": []}
         try:
             with self.config_path.open("r", encoding="utf-8") as handle:
                 return validate_config(json.load(handle))
         except (OSError, json.JSONDecodeError, ConfigError) as error:
             self.config_malformed = True
             self.config_error = bounded_text(error)
-            return {"version": 1, "servers": []}
+            return {"version": 1, "toasts": {"enabled": False, "duration": "default"}, "servers": []}
 
     def load_state(self) -> dict[str, Any]:
         empty = {"version": 1, "muteUntil": 0, "servers": {}}
@@ -628,6 +659,73 @@ class Bridge:
             self.output.write(line + "\n")
             self.output.flush()
 
+    @staticmethod
+    def _run_notification_sender(argv: list[str]) -> None:
+        subprocess.run(argv, check=True, timeout=5, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def send_native_toast(self, server: dict[str, Any], row: dict[str, Any]) -> None:
+        with self.state_lock:
+            current_server = self.server_by_id(str(server.get("id") or ""))
+            settings = self.config["toasts"]
+            if (not settings["enabled"] or current_server is None
+                    or not current_server["enabled"] or not current_server["showToasts"]):
+                return
+        if self.current_mute_until() != 0:
+            return
+
+        summary_source = " ".join(
+            str(row.get("title") or "Omartfy").replace("\0", "�").splitlines()
+        ).strip()[:160]
+        label = " ".join(str(current_server["label"]).replace("\0", "�").splitlines()).strip()
+        topic = str(row.get("topic") or "").replace("\0", "�")
+        message = str(row.get("message") or "").replace("\0", "�")
+        body_source = f"{label} · {topic}\n{message}"[:500]
+        if summary_source.startswith("-"):
+            summary_source = " " + summary_source
+        if body_source.startswith("-"):
+            body_source = " " + body_source
+        summary = html.escape(summary_source, quote=True)
+        body = html.escape(body_source, quote=True)
+
+        duration = str(settings["duration"])
+        priority = int(row.get("priority") or 3)
+        urgency = "low" if priority <= 2 else ("critical" if priority >= 5 else "normal")
+        expire_time = ""
+        if duration in {"8-seconds", "15-seconds", "30-seconds"}:
+            urgency = "normal"
+            expire_time = {
+                "8-seconds": "8000",
+                "15-seconds": "15000",
+                "30-seconds": "30000",
+            }[duration]
+        elif duration == "until-dismissed":
+            urgency = "critical"
+
+        argv = [
+            "omarchy-notification-send",
+            "--app-name", "Omartfy",
+            "--glyph", "󰂚",
+            "--urgency", urgency,
+            "--exec", "omarchy-shell shell summon dailen.omartfy '{}'",
+            summary, body,
+        ]
+        if expire_time:
+            argv.extend(["--expire-time", expire_time])
+
+        try:
+            self.notification_sender(argv)
+        except (OSError, subprocess.SubprocessError):
+            with self.toast_lock:
+                should_emit = not self.toast_error_active
+                self.toast_error_active = True
+            if should_emit:
+                self.emit({"event": "error", "fatal": False,
+                           "message": "Could not show desktop toast"})
+        else:
+            with self.toast_lock:
+                self.toast_error_active = False
+
     def set_server_status(self, server_id: str, state: str, error: str = "") -> None:
         safe = self.safe_error(error, "") if error else ""
         with self.state_lock:
@@ -662,6 +760,7 @@ class Bridge:
             "event": "snapshot",
             "servers": servers,
             "notifications": self.all_rows(),
+            "toastSettings": dict(self.config["toasts"]),
             "muteUntil": self.current_mute_until(),
         }
 
@@ -716,12 +815,16 @@ class Bridge:
         }
         return row
 
-    def apply_event(self, server_id: str, event: dict[str, Any], advance_cursor: bool = True) -> None:
+    def apply_event(self, server_id: str, event: dict[str, Any], advance_cursor: bool = True,
+                    show_toast: bool = False) -> None:
         event_type = str(event.get("event") or "")
-        if event_type in {"open", "keepalive", "poll_request"} or event_type not in {"message", "message_clear", "message_delete"}:
+        if event_type in {"open", "keepalive", "poll_request"} or event_type not in {
+            "message", "message_clear", "message_delete"
+        }:
             return
         event_id = str(event.get("id") or "")
         emitted: dict[str, Any] | None = None
+        native_toast: tuple[dict[str, Any], dict[str, Any]] | None = None
         with self.state_lock:
             state = self.server_state(server_id)
             recent = state["recentIds"]
@@ -747,8 +850,13 @@ class Bridge:
                     ordered = sorted(state["notifications"].values(),
                                      key=lambda item: (int(item.get("time") or 0), str(item.get("id") or "")),
                                      reverse=True)
-                    state["notifications"] = {item["notificationKey"]: item for item in ordered[:MAX_ROWS]}
+                    state["notifications"] = {
+                        item["notificationKey"]: item for item in ordered[:MAX_ROWS]
+                    }
                     emitted = {"event": "notification_upsert", "notification": qml_notification(row)}
+                    server = self.server_by_id(server_id)
+                    if old is None and show_toast and server is not None:
+                        native_toast = (server, row)
             else:
                 topic = str(event.get("topic") or "")
                 effective_sequence = str(event.get("sequence_id") or event_id)
@@ -763,6 +871,8 @@ class Bridge:
             self.persist_state()
         if emitted:
             self.emit(emitted)
+        if native_toast:
+            self.send_native_toast(*native_toast)
 
     def mark_read(self, server_id: str) -> None:
         changed: list[dict[str, Any]] = []
@@ -896,7 +1006,11 @@ class Bridge:
                 if folded in labels:
                     raise ConfigError("Server labels must be unique")
                 labels.add(folded)
-            next_config = {"version": 1, "servers": next_servers}
+            next_config = {
+                "version": 1,
+                "toasts": dict(self.config["toasts"]),
+                "servers": next_servers,
+            }
 
             cursor = ""
             added_topics: list[str] = []
@@ -943,6 +1057,38 @@ class Bridge:
                        "ok": False, "server": {}, "deletedServerId": "",
                        "error": self.safe_error(error, "Could not save server")})
 
+    def save_toast_settings(self, request_id: str, candidate: Any) -> None:
+        if self.config_malformed:
+            self.emit({
+                "event": "config_result", "requestId": request_id, "operation": "save_toasts",
+                "ok": False, "settings": {}, "server": {}, "deletedServerId": "",
+                "error": "Malformed configuration must be fixed outside the editor",
+            })
+            return
+        try:
+            settings = normalize_toast_settings(candidate)
+            with self.state_lock:
+                next_config = {
+                    "version": 1,
+                    "toasts": settings,
+                    "servers": self.config["servers"],
+                }
+                atomic_json_write(self.config_path, next_config)
+                self.config = next_config
+            self.emit({
+                "event": "config_result", "requestId": request_id, "operation": "save_toasts",
+                "ok": True, "settings": dict(settings), "server": {}, "deletedServerId": "",
+                "error": "",
+            })
+            self.emit(self.snapshot())
+        except (ConfigError, OSError) as error:
+            self.emit({
+                "event": "config_result", "requestId": request_id, "operation": "save_toasts",
+                "ok": False, "settings": {}, "server": {}, "deletedServerId": "",
+                "error": self.safe_error(error, "Could not save notification settings"),
+            })
+
+
     def delete_server(self, request_id: str, server_id: str) -> None:
         if self.config_malformed:
             self.emit({"event": "config_result", "requestId": request_id, "operation": "delete",
@@ -961,8 +1107,13 @@ class Bridge:
                 state = self.state["servers"].pop(server_id, None)
                 if state:
                     self.remove_media_for_rows(list((state.get("notifications") or {}).values()))
-                self.config = {"version": 1, "servers": [item for item in self.config["servers"]
-                                                          if item["id"] != server_id]}
+                self.config = {
+                    "version": 1,
+                    "toasts": dict(self.config["toasts"]),
+                    "servers": [
+                        item for item in self.config["servers"] if item["id"] != server_id
+                    ],
+                }
                 atomic_json_write(self.config_path, self.config)
                 self.persist_state()
                 self.statuses.pop(server_id, None)
@@ -1287,6 +1438,8 @@ class Bridge:
                              str(command.get("kind") or ""))
         elif name == "save_server":
             self.save_server(request_id, command.get("server"))
+        elif name == "save_toast_settings":
+            self.save_toast_settings(request_id, command.get("settings"))
         elif name == "delete_server":
             self.delete_server(request_id, str(command.get("serverId") or ""))
         elif name == "test_server":

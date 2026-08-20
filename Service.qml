@@ -18,6 +18,7 @@ Item {
   property int nextRequestNumber: 1
   property var actionStates: ({})
   property var mediaStates: ({})
+  property var toastSettings: ({ enabled: false, duration: "default" })
   property double muteUntil: 0
   property double nowMs: Date.now()
   readonly property bool dndActive: muteUntil < 0 || muteUntil * 1000 > nowMs
@@ -76,6 +77,13 @@ Item {
   function applySnapshot(message) {
     root.servers = Array.isArray(message.servers) ? message.servers.slice() : []
     root.notifications = Array.isArray(message.notifications) ? message.notifications.slice() : []
+    var toastSettings = message.toastSettings
+    root.toastSettings = toastSettings && typeof toastSettings === "object"
+      ? {
+          enabled: toastSettings.enabled === true,
+          duration: String(toastSettings.duration || "default")
+        }
+      : { enabled: false, duration: "default" }
     root.nowMs = Date.now()
     root.muteUntil = Number(message.muteUntil || 0)
     root.helperReady = true
@@ -237,6 +245,10 @@ Item {
 
   function saveServer(server) {
     return root.send({ cmd: "save_server", server: server })
+  }
+
+  function saveToastSettings(settings) {
+    return root.send({ cmd: "save_toast_settings", settings: settings })
   }
 
   function deleteServer(serverId) {
