@@ -20,6 +20,7 @@ from ntfy_bridge import (
     Bridge,
     ConfigError,
     MediaError,
+    SubscriptionWorker,
     atomic_json_write,
     authorization_header,
     normalize_server,
@@ -74,10 +75,13 @@ class BridgeCase(unittest.TestCase):
             bridge.shutdown()
         self.temp.cleanup()
 
-    def make_bridge(self, config=None):
+    def make_bridge(self, config=None, notification_sender=None):
         if config is not None:
             atomic_json_write(self.config_path, config)
-        bridge = Bridge(self.config_path, self.state_dir, self.output)
+        bridge = Bridge(
+            self.config_path, self.state_dir, self.output,
+            notification_sender=notification_sender,
+        )
         self.bridges.append(bridge)
         return bridge
 
@@ -316,6 +320,204 @@ class BridgeCase(unittest.TestCase):
             finally:
                 bridge_module.MAX_MEDIA_CACHE = old_limit
 
+    def test_toast_config_defaults_validation_protocol_and_persistence(self):
+        defaults = validate_config({"version": 1, "servers": []})
+        self.assertEqual(defaults["toasts"], {"enabled": False, "duration": "default"})
+
+        server = normalize_server({
+            "label": "Quiet", "baseUrl": "https://example.com", "topics": ["alerts"],
+            "enabled": False,
+        })
+        self.assertTrue(server["showToasts"])
+        self.assertTrue(public_server(server)["showToasts"])
+        for invalid in (
+            {"version": 1, "servers": [], "toasts": []},
+            {"version": 1, "servers": [], "toasts": {"enabled": 1}},
+            {"version": 1, "servers": [], "toasts": {"duration": "forever"}},
+            {"version": 1, "servers": [{**server, "showToasts": "yes"}]},
+        ):
+            with self.assertRaises(ConfigError):
+                validate_config(invalid)
+
+        bridge = self.make_bridge({
+            "version": 1,
+            "toasts": {"enabled": True, "duration": "15-seconds"},
+            "servers": [{**server, "showToasts": False}],
+        })
+        self.assertEqual(
+            bridge.snapshot()["toastSettings"],
+            {"enabled": True, "duration": "15-seconds"},
+        )
+        candidate = {
+            "label": "Second", "baseUrl": "https://second.example.com",
+            "topics": ["news"], "enabled": False, "showToasts": True,
+        }
+        bridge.save_server("server-save", candidate)
+        saved_id = next(
+            event["server"]["id"] for event in self.events()
+            if event.get("requestId") == "server-save" and event["ok"]
+        )
+        self.assertEqual(
+            json.loads(self.config_path.read_text())["toasts"],
+            {"enabled": True, "duration": "15-seconds"},
+        )
+        bridge.delete_server("server-delete", saved_id)
+        self.assertEqual(
+            json.loads(self.config_path.read_text())["toasts"],
+            {"enabled": True, "duration": "15-seconds"},
+        )
+
+        bridge.handle_command({
+            "cmd": "save_toast_settings", "requestId": "toast-save",
+            "settings": {"enabled": False, "duration": "30-seconds"},
+        })
+        result = next(event for event in self.events() if event.get("requestId") == "toast-save")
+        self.assertEqual(result, {
+            "event": "config_result", "requestId": "toast-save",
+            "operation": "save_toasts", "ok": True,
+            "settings": {"enabled": False, "duration": "30-seconds"},
+            "server": {}, "deletedServerId": "", "error": "",
+        })
+        self.assertEqual(bridge.config["toasts"], result["settings"])
+        bridge.save_toast_settings("toast-bad", {"enabled": True, "duration": "unknown"})
+        bad = next(event for event in self.events() if event.get("requestId") == "toast-bad")
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bridge.config["toasts"], result["settings"])
+        self.assertEqual(stat.S_IMODE(self.config_path.stat().st_mode), 0o600)
+
+    def test_toasts_only_dispatch_for_new_live_unsuppressed_messages(self):
+        sent = []
+        server = normalize_server({
+            "label": "Home", "baseUrl": "https://example.com", "topics": ["alerts"],
+        })
+        bridge = self.make_bridge({
+            "version": 1,
+            "toasts": {"enabled": True, "duration": "default"},
+            "servers": [server],
+        }, notification_sender=sent.append)
+        worker = SubscriptionWorker(bridge, server)
+
+        cached = {"event": "message", "id": "cached", "topic": "alerts", "message": "old"}
+        worker._consume(io.BytesIO((json.dumps(cached) + "\n").encode()), True, False)
+        self.assertEqual(sent, [])
+
+        live = {"event": "message", "id": "live", "topic": "alerts", "message": "new"}
+        worker._consume(io.BytesIO((json.dumps(live) + "\n").encode()), True, True)
+        self.assertEqual(len(sent), 1)
+        bridge.apply_event(server["id"], live, show_toast=True)
+        bridge.apply_event(server["id"], {"event": "open", "id": "open"}, show_toast=True)
+        self.assertEqual(len(sent), 1)
+
+        bridge.set_mute(-1)
+        bridge.apply_event(server["id"], {
+            "event": "message", "id": "muted", "topic": "alerts", "message": "muted",
+        }, show_toast=True)
+        bridge.set_mute(0)
+        bridge.server_state(server["id"])["dismissed"].append("alerts:dismissed")
+        bridge.apply_event(server["id"], {
+            "event": "message", "id": "dismissed-event", "sequence_id": "dismissed",
+            "topic": "alerts", "message": "dismissed",
+        }, show_toast=True)
+        bridge.config["toasts"]["enabled"] = False
+        bridge.apply_event(server["id"], {
+            "event": "message", "id": "global-off", "topic": "alerts", "message": "off",
+        }, show_toast=True)
+        bridge.config["toasts"]["enabled"] = True
+        bridge.config["servers"][0]["showToasts"] = False
+        bridge.apply_event(server["id"], {
+            "event": "message", "id": "server-off", "topic": "alerts", "message": "off",
+        }, show_toast=True)
+        bridge.config["servers"][0]["showToasts"] = True
+        bridge.config["servers"][0]["enabled"] = False
+        bridge.apply_event(server["id"], {
+            "event": "message", "id": "disabled", "topic": "alerts", "message": "off",
+        }, show_toast=True)
+        self.assertEqual(len(sent), 1)
+
+    def test_native_toast_argv_is_bounded_escaped_static_and_honors_duration(self):
+        sent = []
+        server = normalize_server({
+            "label": "Home", "baseUrl": "https://example.com", "topics": ["alerts"],
+            "auth": {"type": "token", "secret": "private-token"},
+        })
+        bridge = self.make_bridge({
+            "version": 1,
+            "toasts": {"enabled": True, "duration": "default"},
+            "servers": [server],
+        }, notification_sender=sent.append)
+        row = bridge.normalize_message(server["id"], {
+            "event": "message", "id": "argv", "topic": "alerts", "priority": 1,
+            "title": "--exec <b>&\" " + "x" * 300,
+            "message": "Hello <script>& " + "y" * 600,
+            "click": "https://click.invalid/private",
+            "icon": "https://icon.invalid/private.png",
+            "attachment": {"url": "https://attachment.invalid/private.png"},
+            "actions": [{"id": "open", "action": "view", "url": "https://action.invalid"}],
+        })
+        bridge.send_native_toast(server, row)
+        argv = sent.pop()
+        self.assertEqual(argv[:9], [
+            "omarchy-notification-send",
+            "--app-name", "Omartfy",
+            "--glyph", "󰂚",
+            "--urgency", "low",
+            "--exec", "omarchy-shell shell summon dailen.omartfy '{}'",
+        ])
+        self.assertTrue(argv[9].startswith(" --exec "))
+        self.assertIn("&lt;b&gt;&amp;&quot;", argv[9])
+        self.assertIn("Hello &lt;script&gt;&amp;", argv[10])
+        self.assertLessEqual(len(bridge_module.html.unescape(argv[9]).lstrip()), 160)
+        self.assertLessEqual(len(bridge_module.html.unescape(argv[10])), 500)
+        joined = "\0".join(argv)
+        for protected in (
+            "private-token", "https://click.invalid", "https://icon.invalid",
+            "https://attachment.invalid", "https://action.invalid",
+        ):
+            self.assertNotIn(protected, joined)
+
+        cases = {
+            "8-seconds": ("normal", "8000"),
+            "15-seconds": ("normal", "15000"),
+            "30-seconds": ("normal", "30000"),
+        }
+        for duration, (urgency, timeout) in cases.items():
+            bridge.config["toasts"]["duration"] = duration
+            bridge.send_native_toast(server, row)
+            current = sent.pop()
+            self.assertEqual(current[6], urgency)
+            self.assertEqual(current[-2:], ["--expire-time", timeout])
+
+        bridge.config["toasts"]["duration"] = "until-dismissed"
+        bridge.send_native_toast(server, row)
+        persistent = sent.pop()
+        self.assertEqual(persistent[6], "critical")
+        self.assertNotIn("--expire-time", persistent)
+
+        bridge.config["toasts"]["duration"] = "default"
+        row["priority"] = 5
+        bridge.send_native_toast(server, row)
+        urgent = sent.pop()
+        self.assertEqual(urgent[6], "critical")
+        self.assertNotIn("--expire-time", urgent)
+
+        def fail(_argv):
+            raise OSError("sender unavailable")
+
+        bridge.notification_sender = fail
+        bridge.send_native_toast(server, row)
+        bridge.send_native_toast(server, row)
+        errors = [event for event in self.events()
+                  if event.get("message") == "Could not show desktop toast"]
+        self.assertEqual(len(errors), 1)
+        bridge.notification_sender = sent.append
+        bridge.send_native_toast(server, row)
+        sent.pop()
+        bridge.notification_sender = fail
+        bridge.send_native_toast(server, row)
+        errors = [event for event in self.events()
+                  if event.get("message") == "Could not show desktop toast"]
+        self.assertEqual(len(errors), 2)
+
     def test_save_delete_results_and_malformed_config_protection(self):
         bridge = self.make_bridge({"version": 1, "servers": []})
         candidate = {"label": "Offline", "baseUrl": "https://example.com", "topics": ["alerts"], "enabled": False}
@@ -335,6 +537,9 @@ class BridgeCase(unittest.TestCase):
         malformed = Bridge(malformed_path, Path(self.temp.name) / "malformed-state", io.StringIO())
         self.bridges.append(malformed)
         malformed.save_server("no-overwrite", candidate)
+        malformed.save_toast_settings("no-toast-overwrite", {
+            "enabled": True, "duration": "8-seconds",
+        })
         self.assertEqual(malformed_path.read_text(encoding="utf-8"), "{bad")
 
     def test_json_lines_subprocess_correlates_commands_and_exits_zero(self):

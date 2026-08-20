@@ -15,9 +15,14 @@ Item {
   property string pendingSave: ""
   property string pendingTest: ""
   property string pendingDelete: ""
+  property string pendingToastSave: ""
   property string resultText: ""
+  property string toastResultText: ""
   property bool deleteConfirmation: false
   property bool addingServer: false
+  readonly property var toastDurationValues: [
+    "default", "8-seconds", "15-seconds", "30-seconds", "until-dismissed"
+  ]
 
   signal done()
   signal serverDeleted(string serverId)
@@ -28,9 +33,32 @@ Item {
     root.editServer(root.servers[0])
   }
 
-  onVisibleChanged: Qt.callLater(root.selectSavedServer)
+  onVisibleChanged: {
+    Qt.callLater(root.selectSavedServer)
+    Qt.callLater(root.loadToastSettings)
+  }
   onServersChanged: Qt.callLater(root.selectSavedServer)
-  Component.onCompleted: Qt.callLater(root.selectSavedServer)
+  Component.onCompleted: {
+    Qt.callLater(root.selectSavedServer)
+    Qt.callLater(root.loadToastSettings)
+  }
+
+  function loadToastSettings() {
+    var settings = root.service ? root.service.toastSettings : null
+    nativeToastsCheck.checked = !!(settings && settings.enabled === true)
+    var duration = String((settings || {}).duration || "default")
+    var index = root.toastDurationValues.indexOf(duration)
+    toastDurationBox.currentIndex = index >= 0 ? index : 0
+  }
+
+  function saveToastSettings() {
+    if (!root.service || root.pendingToastSave) return
+    root.toastResultText = ""
+    root.pendingToastSave = root.service.saveToastSettings({
+      enabled: nativeToastsCheck.checked,
+      duration: root.toastDurationValues[toastDurationBox.currentIndex] || "default"
+    })
+  }
 
   function topics() {
     return topicsField.text.split(",").map(function(value) { return value.trim() })
@@ -80,6 +108,7 @@ Item {
       baseUrl: baseUrlField.text.trim(),
       topics: root.topics(),
       enabled: enabledCheck.checked,
+      showToasts: showToastsCheck.checked,
       allowHttpActions: httpActionsCheck.checked,
       allowInsecureHttp: insecureCheck.checked,
       auth: {
@@ -97,6 +126,7 @@ Item {
     baseUrlField.text = "https://ntfy.sh"
     topicsField.text = ""
     enabledCheck.checked = true
+    showToastsCheck.checked = true
     httpActionsCheck.checked = false
     insecureCheck.checked = false
     authTypeBox.currentIndex = 0
@@ -118,6 +148,7 @@ Item {
     baseUrlField.text = String(server.baseUrl || "")
     topicsField.text = Array.isArray(server.topics) ? server.topics.join(", ") : ""
     enabledCheck.checked = server.enabled !== false
+    showToastsCheck.checked = server.showToasts !== false
     httpActionsCheck.checked = server.allowHttpActions === true
     insecureCheck.checked = server.allowInsecureHttp === true
     var type = String((server.auth || {}).type || "none")
@@ -143,7 +174,18 @@ Item {
 
   Connections {
     target: root.service
+    function onToastSettingsChanged() {
+      root.loadToastSettings()
+    }
+
     function onConfigCompleted(result) {
+      if (result.requestId === root.pendingToastSave && result.operation === "save_toasts") {
+        root.pendingToastSave = ""
+        root.toastResultText = result.ok
+          ? "Saved"
+          : String(result.error || "Could not save notification settings")
+        return
+      }
       if (result.requestId !== root.pendingSave && result.requestId !== root.pendingDelete) return
       if (result.ok) {
         if (result.operation === "delete") {
@@ -197,7 +239,7 @@ Item {
 
         Text {
           anchors.verticalCenter: parent.verticalCenter
-          text: "Servers"
+          text: "Settings"
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
@@ -211,6 +253,76 @@ Item {
           onClicked: root.beginAdd()
         }
       }
+
+      Column {
+        width: parent.width
+        spacing: Style.space(7)
+
+        Text {
+          text: "Desktop notifications"
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+        }
+
+        CheckBox {
+          id: nativeToastsCheck
+          text: "Show native Omarchy toasts"
+        }
+
+        Row {
+          spacing: Style.space(8)
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Duration"
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          ComboBox {
+            id: toastDurationBox
+            enabled: nativeToastsCheck.checked
+            model: [
+              "Omarchy default",
+              "8 seconds",
+              "15 seconds",
+              "30 seconds",
+              "Until dismissed"
+            ]
+          }
+        }
+
+        Button {
+          text: root.pendingToastSave ? "Saving…" : "Save notification settings"
+          enabled: !!root.service && !root.pendingToastSave
+          onClicked: root.saveToastSettings()
+        }
+
+        Text {
+          width: parent.width
+          visible: root.toastResultText.length > 0
+          text: root.toastResultText
+          color: root.toastResultText === "Saved" ? Color.accent : root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+        }
+
+        Text {
+          width: parent.width
+          text: "Omarchy default follows ntfy priority. Finite choices use the exact lifetime; until dismissed requires manual close. Omartfy DND and Omarchy notification DND suppress popups while the inbox keeps collecting."
+          color: root.foreground
+          opacity: 0.72
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+        }
+      }
+
+      PanelSeparator { width: parent.width }
 
       Column {
         width: parent.width
@@ -283,6 +395,13 @@ Item {
           spacing: Style.space(12)
           CheckBox { id: enabledCheck; text: "Enabled"; checked: true }
           CheckBox { id: httpActionsCheck; text: "Allow publisher-supplied HTTP actions" }
+        }
+
+        CheckBox {
+          id: showToastsCheck
+          width: parent.width
+          text: "Show toasts from this server"
+          checked: true
         }
 
         Row {

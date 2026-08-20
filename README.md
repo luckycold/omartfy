@@ -21,6 +21,7 @@ A multi-server [ntfy](https://ntfy.sh/) client for the Omarchy bar. Omartfy comb
 - Local read, delete, and clear state without publishing changes to ntfy
 - ntfy view, copy, and opt-in HTTP actions in an ntfy-style action row
 - Timed or indefinite DND from the bar context menu
+- Opt-in native Omarchy desktop toasts with global, per-server, duration, DND, and click-to-open controls
 - Lazy icon and image-attachment previews with strict size, format, redirect, and origin checks
 - Keyboard navigation, inline search, overflow tabs, and a dedicated server editor
 - Durable cursor replay and event deduplication across shell restarts
@@ -32,6 +33,7 @@ A multi-server [ntfy](https://ntfy.sh/) client for the Omarchy bar. Omartfy comb
 - `setpriv` from util-linux
 - `wl-copy` from wl-clipboard
 - `omarchy-launch-browser`
+- `omarchy-notification-send`
 
 No pip package, npm package, third-party ntfy SDK, SSE package, or WebSocket package is required.
 
@@ -68,9 +70,20 @@ Each profile has its own connection and trust boundary:
 - **Topics:** one or more comma-separated ntfy topic names
 - **Authentication:** none, Bearer token, or Basic username/password
 - **Allow publisher-supplied HTTP actions:** disabled by default; enable only for trusted publishers
+- **Show toasts from this server:** enabled per profile by default; the global desktop-notification switch remains the master control
 - **Allow credentials over insecure HTTP:** shown only when credentials would cross non-loopback plain HTTP
 
 A blank secret while editing an existing profile preserves the stored secret. Selecting a connected server filters the inbox; use the pencil button in **Settings** to edit that profile.
+
+## Desktop notifications
+
+Native Omarchy toasts are disabled globally after installation and updates. Enable **Show native Omarchy toasts** in **Settings**, then disable individual noisy profiles with **Show toasts from this server**.
+
+**Omarchy default** follows ntfy priority: low-priority messages use the native low lifetime, normal and high messages use the native normal lifetime, and urgent messages remain until dismissed. The explicit **8 seconds**, **15 seconds**, and **30 seconds** choices use that exact lifetime regardless of priority; **Until dismissed** requires manual close.
+
+Initial cached history populates the Omartfy inbox silently. New messages after the established cursor, including reconnect catch-up messages, can create native toasts. Left-clicking a toast summons the Omartfy panel on the focused monitor; right-clicking dismisses it.
+
+Omartfy DND and Omarchy's global notification DND both suppress popups while the durable Omartfy inbox continues collecting. Omarchy owns native notification history as presentation state; it is not synchronized with Omartfy read or delete state.
 
 ## Keyboard controls
 
