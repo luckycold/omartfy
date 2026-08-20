@@ -51,7 +51,7 @@
     </section>
 
     <section class="signal-strip" aria-label="Core capabilities">
-      <span>Multi-server</span><span>Local read state</span><span>Timed DND</span><span>ntfy actions</span><span>Keyboard-first</span>
+      <span>Multi-server</span><span>Native toasts</span><span>Local read state</span><span>Timed DND</span><span>ntfy actions</span><span>Keyboard-first</span>
     </section>
 
     <section id="features" class="section shell">
@@ -65,8 +65,9 @@
         <article><span class="feature-index">02</span><h3>Real ntfy actions</h3><p>View and copy actions work directly. Publisher-supplied HTTP actions remain off until you explicitly trust that server.</p></article>
         <article><span class="feature-index">03</span><h3>Keyboard-native</h3><p>Navigate with j/k and h/l, mark read with Enter, expand with e, search with /, and run visible actions with 1–3.</p></article>
         <article><span class="feature-index">04</span><h3>Quiet when needed</h3><p>Right-click the bar icon for timed or indefinite DND. Messages continue collecting while badges and urgency stay muted.</p></article>
-        <article><span class="feature-index">05</span><h3>Restart-safe state</h3><p>Cursors, deduplication, local read/delete state, and DND survive Omarchy shell restarts without changing ntfy upstream.</p></article>
-        <article><span class="feature-index">06</span><h3>Conservative media</h3><p>Useful icons and raster previews load lazily with origin, redirect, format, size, and dimension limits.</p></article>
+        <article><span class="feature-index">05</span><h3>Native Omarchy toasts</h3><p>Opt in to desktop toasts with custom duration, per-server switches, DND respect, and click-to-open integration.</p></article>
+        <article><span class="feature-index">06</span><h3>Restart-safe state</h3><p>Cursors, deduplication, local read/delete state, and DND survive Omarchy shell restarts without changing ntfy upstream.</p></article>
+        <article><span class="feature-index">07</span><h3>Same-origin media</h3><p>Useful icons and previews load lazily and are strictly restricted to the configured server's origin across all redirects.</p></article>
       </div>
     </section>
 
@@ -107,7 +108,7 @@
         <h2>Credentials stay out of URLs and process arguments.</h2>
       </div>
       <div class="security-copy">
-        <p>Configuration and state are written atomically with restrictive permissions. TLS verification is never disabled. HTTP actions require per-server opt-in and run only after a user activates them.</p>
+        <p>Configuration and state are written atomically with restrictive permissions. TLS verification is never disabled. HTTP actions require per-server opt-in, automatic media is same-origin only, and desktop toasts are opt-in.</p>
         <a href="https://github.com/DailenG/omartfy/blob/main/SECURITY.md">Read the security policy →</a>
       </div>
     </section>
