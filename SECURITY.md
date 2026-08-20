@@ -22,9 +22,9 @@ Omartfy is an unsandboxed Omarchy shell plugin and runs with the current user's 
 - Credentials are sent only in HTTP authorization headers.
 - TLS certificate verification is never disabled.
 - Credentialed non-loopback plain HTTP requires explicit acknowledgement.
-- View and attachment destinations are restricted to validated HTTP(S) URLs.
+- Explicit, user-activated view and attachment destinations are restricted to validated HTTP(S) URLs.
 - Publisher-supplied HTTP actions are disabled by default per server, require user activation, and do not follow redirects or retry.
-- Remote media is constrained by origin, redirect, MIME type, file size, image dimensions, and cache limits.
+- Automatic icon and attachment-preview requests, including every redirect, must retain the configured server's exact scheme, host, and effective port.
 - Notification bodies render as plain text; Omartfy does not render remote HTML, Markdown, SVG, audio, or video.
 
 Topic confidentiality and authorization remain the ntfy server administrator's responsibility. An unprotected topic name can function as a public address.

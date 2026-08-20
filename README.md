@@ -115,6 +115,8 @@ Omarchy plugins run unsandboxed with the current user's permissions. Omartfy:
 - Keeps HTTP actions disabled per server until explicitly enabled
 - Runs publisher-provided HTTP actions only after user activation, without redirects or retries
 - Launches validated HTTP(S) view URLs through `omarchy-launch-browser` and copies values through `wl-copy`
+- Fetches notification icons and attachment previews only from the configured server's exact scheme, host, and effective port; every automatic-media redirect must retain that origin
+- Keeps explicit, user-activated opening of validated HTTP(S) view and attachment URLs separate from automatic media fetching
 
 Review topic access controls and publisher trust before enabling a server or HTTP actions. See [SECURITY.md](SECURITY.md) for the reporting policy and implementation boundaries.
 

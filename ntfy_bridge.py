@@ -268,6 +268,13 @@ def validate_web_url(value: Any) -> str:
     return url
 
 
+def validate_media_url(server: dict[str, Any], value: Any) -> str:
+    url = validate_web_url(value)
+    if origin_tuple(url) != origin_tuple(server["baseUrl"]):
+        raise MediaError("Media URL must use the configured server origin")
+    return url
+
+
 def clean_attachment(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
@@ -1138,7 +1145,7 @@ class Bridge:
                        "ok": False, "path": "", "error": self.safe_error(error, "Could not load media")})
 
     def download_media(self, server: dict[str, Any], kind: str, source_url: str) -> Path:
-        url = validate_web_url(source_url)
+        url = validate_media_url(server, source_url)
         base_origin = origin_tuple(server["baseUrl"])
         opener = urllib.request.build_opener(NoRedirect)
         redirects = 0
@@ -1161,7 +1168,7 @@ class Bridge:
                 if code in {301, 302, 303, 307, 308}:
                     if not location or redirects >= 3:
                         raise MediaError("Too many media redirects")
-                    url = validate_web_url(urllib.parse.urljoin(url, location))
+                    url = validate_media_url(server, urllib.parse.urljoin(url, location))
                     redirects += 1
                     continue
                 raise MediaError(f"Media request returned {code}") from error

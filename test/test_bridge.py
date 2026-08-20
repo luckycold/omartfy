@@ -277,7 +277,7 @@ class BridgeCase(unittest.TestCase):
             self.assertEqual(target.server.state.actions[-1]["method"], "POST")
             self.assertEqual(target.server.state.actions[-1]["body"], '{"ok":true}')
 
-    def test_media_origin_redirect_raster_file_and_cache_limits(self):
+    def test_media_allows_only_configured_origin_and_rejects_cross_origin_redirects(self):
         with RunningServer("media-token") as source, RunningServer() as target:
             server = normalize_server({"label": "Media", "baseUrl": source.url + "/proxy", "topics": ["alerts"],
                                        "enabled": False, "auth": {"type": "token", "secret": "media-token"}})
@@ -286,10 +286,19 @@ class BridgeCase(unittest.TestCase):
             self.assertTrue(same.exists())
             self.assertEqual(stat.S_IMODE(same.stat().st_mode), 0o600)
 
-            redirect = source.url + "/redirect?" + urllib.parse.urlencode({"to": target.url + "/capture.png"})
-            cross = bridge.download_media(server, "icon", redirect)
-            self.assertTrue(cross.exists())
-            self.assertNotIn("Authorization", target.server.state.actions[-1]["headers"])
+            same_redirect = source.url + "/redirect?" + urllib.parse.urlencode({"to": source.url + "/icon.png"})
+            redirected = bridge.download_media(server, "icon", same_redirect)
+            self.assertTrue(redirected.exists())
+
+            with self.assertRaisesRegex(MediaError, "configured server origin"):
+                bridge.download_media(server, "icon", target.url + "/capture.png")
+            self.assertEqual(target.server.state.actions, [])
+
+            cross_redirect = source.url + "/redirect?" + urllib.parse.urlencode({"to": target.url + "/capture.png"})
+            with self.assertRaisesRegex(MediaError, "configured server origin"):
+                bridge.download_media(server, "icon", cross_redirect)
+            self.assertEqual(target.server.state.actions, [])
+
             with self.assertRaises(MediaError):
                 bridge.download_media(server, "icon", source.url + "/huge.png")
             with self.assertRaises(MediaError):
