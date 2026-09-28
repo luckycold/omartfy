@@ -596,6 +596,37 @@ class BridgeCase(unittest.TestCase):
         self.assertTrue(summary_arg.startswith(" --icon="))
         self.assertEqual(len(errors), 2)
 
+    def test_native_toast_shows_same_origin_image_attachment(self):
+        with RunningServer("media-token") as source:
+            sent = []
+            server = normalize_server({"label": "Media", "baseUrl": source.url + "/proxy", "topics": ["alerts"],
+                                       "enabled": False, "auth": {"type": "token", "secret": "media-token"}})
+            bridge = self.make_bridge({
+                "version": 1,
+                "toasts": {"enabled": True, "duration": "default"},
+                "servers": [server],
+            }, notification_sender=sent.append)
+            bridge.config["servers"][0]["enabled"] = True
+            row = bridge.normalize_message(server["id"], {
+                "event": "message", "id": "picture", "topic": "alerts", "title": "Snapshot",
+                "attachment": {"name": "icon.png", "type": "image/png", "url": source.url + "/icon.png"},
+            })
+            bridge.send_native_toast(server, row)
+            argv = sent.pop()
+            image = argv[argv.index("--image") + 1]
+            self.assertLess(argv.index("--image"), argv.index("--exec"))
+            self.assertTrue(Path(image).exists())
+            self.assertTrue(Path(image).is_relative_to(bridge.media_dir))
+
+            for attachment in (
+                {"name": "notes.pdf", "type": "application/pdf", "url": source.url + "/icon.png"},
+                {"name": "old.png", "type": "image/png", "url": source.url + "/icon.png", "expires": 1},
+                {"name": "bad.png", "type": "image/png", "url": source.url + "/bad-media"},
+            ):
+                row["attachment"] = attachment
+                bridge.send_native_toast(server, row)
+                self.assertNotIn("--image", sent.pop())
+
     def test_save_delete_results_and_malformed_config_protection(self):
         bridge = self.make_bridge({"version": 1, "servers": []})
         candidate = {"label": "Offline", "baseUrl": "https://example.com", "topics": ["alerts"], "enabled": False}

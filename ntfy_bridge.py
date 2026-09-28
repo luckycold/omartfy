@@ -686,6 +686,22 @@ class Bridge:
         subprocess.run(argv, check=True, timeout=5, stdin=subprocess.DEVNULL,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    def toast_image(self, server: dict[str, Any], row: dict[str, Any]) -> str:
+        attachment = row.get("attachment") or {}
+        url = str(attachment.get("url") or "")
+        content_type = str(attachment.get("type") or "")
+        expires = int(attachment.get("expires") or row.get("expires") or 0)
+        if not url or (content_type and not content_type.startswith("image/")):
+            return ""
+        if expires and expires <= int(time.time()):
+            return ""
+        try:
+            path = self.download_media(server, "attachment", url)
+        except Exception:
+            return ""
+        self.enforce_media_cache()
+        return str(path)
+
     def send_native_toast(self, server: dict[str, Any], row: dict[str, Any]) -> None:
         with self.state_lock:
             current_server = self.server_by_id(str(server.get("id") or ""))
@@ -724,11 +740,13 @@ class Bridge:
         elif duration == "until-dismissed":
             urgency = "critical"
 
+        image = self.toast_image(current_server, row)
         argv = [
             "omarchy-notification-send",
             "--app-name", "Omartfy",
             "--glyph", "󰂚",
             "--urgency", urgency,
+            *(["--image", image] if image else []),
             summary, body,
         ]
         if expire_time:
