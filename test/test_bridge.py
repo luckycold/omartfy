@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 import urllib.parse
 from pathlib import Path
 
@@ -273,8 +274,14 @@ class BridgeCase(unittest.TestCase):
         def retry_after(_count):
             return urllib.error.HTTPError("https://ntfy.example", 429, "Too Many Requests",
                                           {"Retry-After": "400"}, None)
-        _urls, waits = self.run_worker_until(bridge, server, retry_after, 1)
-        self.assertGreaterEqual(waits[0], 400 * 0.85)
+        _urls, waits = self.run_worker_until(bridge, server, retry_after, 3)
+        self.assertTrue(all(wait >= 400 for wait in waits))
+
+        def long_retry_after(_count):
+            return urllib.error.HTTPError("https://ntfy.example", 429, "Too Many Requests",
+                                          {"Retry-After": "3600"}, None)
+        _urls, waits = self.run_worker_until(bridge, server, long_retry_after, 1)
+        self.assertEqual(waits[0], 3600)
 
         # A stream timeout falls back to polling, and streaming is retried later
         # instead of polling forever.
@@ -688,7 +695,9 @@ class BridgeCase(unittest.TestCase):
             with self.assertRaisesRegex(MediaError, "public addresses"):
                 bridge.download_media(server, "icon", to_local)
             self.assertTrue(bridge_module.resolves_to_public_addresses("8.8.8.8", 443))
-            self.assertFalse(bridge_module.resolves_to_public_addresses("invalid.invalid", 443))
+            with unittest.mock.patch.object(bridge_module.socket, "getaddrinfo",
+                                            side_effect=OSError("no such host")):
+                self.assertFalse(bridge_module.resolves_to_public_addresses("invalid.invalid", 443))
 
             # With the host policy out of the way, the server's token still never
             # reaches another host: one that demands it gets no header and refuses.

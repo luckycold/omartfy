@@ -558,6 +558,7 @@ class SubscriptionWorker(threading.Thread):
         rate_limited = 0
         poll_mode = False
         polls = 0
+        retry_after = 0.0
         while not self.stop_event.is_set() and not self.bridge.stop_event.is_set():
             if not poll_mode:
                 self.bridge.set_server_status(server_id, "connecting", "")
@@ -599,7 +600,7 @@ class SubscriptionWorker(threading.Thread):
                     # Hammering a rate limit gets the address blocked outright, so
                     # back off hard and keep doubling while it persists.
                     try:
-                        retry_after = float(error.headers.get("Retry-After") or 0)
+                        retry_after = max(0.0, float(error.headers.get("Retry-After") or 0))
                     except (TypeError, ValueError):
                         retry_after = 0.0
                     delay = max(retry_after, RATE_LIMIT_MIN_DELAY * 2 ** min(rate_limited, 4))
@@ -627,7 +628,10 @@ class SubscriptionWorker(threading.Thread):
                 delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
                 attempt += 1
                 message = self.bridge.safe_error(error, "Connection lost")
-            jittered = min(MAX_RETRY_DELAY, delay * random.uniform(0.85, 1.15))
+            # A server-requested Retry-After is a floor that neither jitter nor
+            # the cap may undercut.
+            jittered = max(retry_after, min(MAX_RETRY_DELAY, delay * random.uniform(0.85, 1.15)))
+            retry_after = 0.0
             self.bridge.set_server_status(server_id, "backoff", message)
             self.stop_event.wait(jittered)
 
