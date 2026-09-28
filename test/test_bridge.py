@@ -596,6 +596,26 @@ class BridgeCase(unittest.TestCase):
         self.assertTrue(summary_arg.startswith(" --icon="))
         self.assertEqual(len(errors), 2)
 
+    def test_external_media_is_opt_in_per_server_and_never_gets_credentials(self):
+        with RunningServer("media-token") as source, RunningServer() as open_host, \
+                RunningServer("media-token") as guarded_host:
+            server = normalize_server({"label": "Media", "baseUrl": source.url, "topics": ["alerts"],
+                                       "enabled": False, "auth": {"type": "token", "secret": "media-token"}})
+            self.assertFalse(server["allowExternalMedia"])
+            self.assertFalse(public_server(server)["allowExternalMedia"])
+            bridge = self.make_bridge({"version": 1, "servers": [server]})
+            with self.assertRaisesRegex(MediaError, "configured server origin"):
+                bridge.download_media(server, "icon", open_host.url + "/icon.png")
+
+            server = normalize_server({**server, "allowExternalMedia": True})
+            self.assertTrue(public_server(server)["allowExternalMedia"])
+            self.assertTrue(bridge.download_media(server, "icon", open_host.url + "/icon.png").exists())
+            # A host demanding the server's own token must not receive it.
+            with self.assertRaisesRegex(MediaError, "returned 401"):
+                bridge.download_media(server, "icon", guarded_host.url + "/icon.png")
+            with self.assertRaises(MediaError):
+                bridge.download_media(server, "icon", open_host.url + "/bad-media")
+
     def test_native_toast_shows_same_origin_image_attachment(self):
         with RunningServer("media-token") as source:
             sent = []

@@ -206,6 +206,7 @@ def normalize_server(candidate: dict[str, Any], existing: dict[str, Any] | None 
         "enabled": bool(candidate.get("enabled", True)),
         "showToasts": show_toasts,
         "allowHttpActions": bool(candidate.get("allowHttpActions", False)),
+        "allowExternalMedia": bool(candidate.get("allowExternalMedia", False)),
         "allowInsecureHttp": allow_insecure,
         "auth": {"type": auth_type, "username": username, "secret": secret},
     }
@@ -246,6 +247,7 @@ def public_server(server: dict[str, Any], state: str = "disabled", error: str = 
         "topics": list(server["topics"]),
         "enabled": bool(server["enabled"]),
         "allowHttpActions": bool(server["allowHttpActions"]),
+        "allowExternalMedia": bool(server.get("allowExternalMedia", False)),
         "showToasts": bool(server["showToasts"]),
         "allowInsecureHttp": bool(server["allowInsecureHttp"]),
         "auth": {
@@ -302,7 +304,7 @@ def validate_web_url(value: Any) -> str:
 
 def validate_media_url(server: dict[str, Any], value: Any) -> str:
     url = validate_web_url(value)
-    if origin_tuple(url) != origin_tuple(server["baseUrl"]):
+    if not server.get("allowExternalMedia", False) and origin_tuple(url) != origin_tuple(server["baseUrl"]):
         raise MediaError("Media URL must use the configured server origin")
     return url
 
