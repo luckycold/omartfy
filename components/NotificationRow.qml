@@ -34,6 +34,10 @@ CursorSurface {
     ? service.mediaState(notification.notificationKey, "icon") : ({ state: "idle", text: "" })
   readonly property var attachmentMediaState: service
     ? service.mediaState(notification.notificationKey, "attachment") : ({ state: "idle", text: "" })
+  // Landscape images (video and article thumbnails) read better as a full-width
+  // card banner than squeezed into the icon slot; square avatars stay icons.
+  readonly property bool cardView: iconImage.status === Image.Ready
+    && iconImage.implicitWidth > iconImage.implicitHeight * 1.15
 
   function requestIcon() {
     if (root.visible && root.notification.icon && !root.notification.iconPath
@@ -80,12 +84,23 @@ CursorSurface {
     anchors.margins: Style.space(8)
     spacing: Style.space(7)
 
+    Image {
+      width: parent.width
+      height: visible ? Math.round(width * 9 / 16) : 0
+      visible: root.cardView
+      source: visible ? iconImage.source : ""
+      fillMode: Image.PreserveAspectCrop
+      asynchronous: true
+      clip: true
+    }
+
     Row {
       width: parent.width
-      spacing: Style.space(9)
+      spacing: root.cardView ? 0 : Style.space(9)
 
       Item {
-        width: Style.space(40)
+        visible: !root.cardView
+        width: visible ? Style.space(40) : 0
         height: Style.space(40)
 
         Image {
@@ -109,7 +124,7 @@ CursorSurface {
       }
 
       Column {
-        width: parent.width - Style.space(49)
+        width: parent.width - (root.cardView ? 0 : Style.space(49))
         spacing: Style.space(2)
 
         Row {
@@ -232,7 +247,8 @@ CursorSurface {
         source: root.notification.attachmentPath ? Util.fileUrl(root.notification.attachmentPath) : ""
         fillMode: Image.PreserveAspectFit
         asynchronous: true
-        visible: status === Image.Ready
+        // The card banner already shows it when icon and attachment are one image.
+        visible: status === Image.Ready && !(root.cardView && root.attachment.url === root.notification.icon)
       }
 
       Text {
