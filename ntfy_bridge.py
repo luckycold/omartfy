@@ -12,6 +12,7 @@ import os
 import random
 import re
 import secrets
+import socket
 import stat
 import struct
 import subprocess
@@ -302,10 +303,28 @@ def validate_web_url(value: Any) -> str:
     return url
 
 
+def resolves_to_public_addresses(hostname: str, port: int) -> bool:
+    try:
+        infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError):
+        return False
+    addresses = {ipaddress.ip_address(info[4][0].split("%", 1)[0]) for info in infos}
+    return bool(addresses) and all(address.is_global and not address.is_multicast for address in addresses)
+
+
 def validate_media_url(server: dict[str, Any], value: Any) -> str:
     url = validate_web_url(value)
-    if not server.get("allowExternalMedia", False) and origin_tuple(url) != origin_tuple(server["baseUrl"]):
+    if origin_tuple(url) == origin_tuple(server["baseUrl"]):
+        return url
+    if not server.get("allowExternalMedia", False):
         raise MediaError("Media URL must use the configured server origin")
+    # The external-media opt-in covers other public hosts, never the local
+    # network, and never plaintext. Redirects come back through here too.
+    scheme, hostname, port = origin_tuple(url)
+    if scheme != "https":
+        raise MediaError("External media must use HTTPS")
+    if not resolves_to_public_addresses(hostname, port):
+        raise MediaError("External media must resolve to public addresses")
     return url
 
 
@@ -578,6 +597,9 @@ class Bridge:
         self.toast_lock = threading.Lock()
         self.stop_event = threading.Event()
         self.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ntfy-task")
+        # One worker keeps toasts in arrival order while their image downloads
+        # stay off the subscription streams.
+        self.toast_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ntfy-toast")
         self.workers: dict[str, SubscriptionWorker] = {}
         self.statuses: dict[str, dict[str, str]] = {}
         self.inflight_actions: set[tuple[str, str]] = set()
@@ -702,7 +724,8 @@ class Bridge:
         except Exception:
             return ""
         self.enforce_media_cache()
-        return str(path)
+        # Eviction removes unreferenced files first, which can include this one.
+        return str(path) if path.exists() else ""
 
     def send_native_toast(self, server: dict[str, Any], row: dict[str, Any]) -> None:
         with self.state_lock:
@@ -916,7 +939,7 @@ class Bridge:
         if emitted:
             self.emit(emitted)
         if native_toast:
-            self.send_native_toast(*native_toast)
+            self.toast_executor.submit(self.send_native_toast, *native_toast)
 
     def mark_read(self, server_id: str) -> None:
         changed: list[dict[str, Any]] = []
@@ -1535,6 +1558,7 @@ class Bridge:
         for server_id in list(self.workers):
             self.stop_worker(server_id)
         self.executor.shutdown(wait=True, cancel_futures=True)
+        self.toast_executor.shutdown(wait=True, cancel_futures=True)
         self.persist_state()
 
     def run(self) -> int:

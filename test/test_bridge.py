@@ -463,9 +463,11 @@ class BridgeCase(unittest.TestCase):
 
         live = {"event": "message", "id": "live", "topic": "alerts", "message": "new"}
         worker._consume(io.BytesIO((json.dumps(live) + "\n").encode()), True, True)
+        bridge.toast_executor.submit(lambda: None).result()
         self.assertEqual(len(sent), 1)
         bridge.apply_event(server["id"], live, show_toast=True)
         bridge.apply_event(server["id"], {"event": "open", "id": "open"}, show_toast=True)
+        bridge.toast_executor.submit(lambda: None).result()
         self.assertEqual(len(sent), 1)
 
         bridge.set_mute(-1)
@@ -492,6 +494,7 @@ class BridgeCase(unittest.TestCase):
         bridge.apply_event(server["id"], {
             "event": "message", "id": "disabled", "topic": "alerts", "message": "off",
         }, show_toast=True)
+        bridge.toast_executor.submit(lambda: None).result()
         self.assertEqual(len(sent), 1)
 
     def test_native_toast_argv_is_bounded_escaped_static_and_honors_duration(self):
@@ -596,7 +599,7 @@ class BridgeCase(unittest.TestCase):
         self.assertTrue(summary_arg.startswith(" --icon="))
         self.assertEqual(len(errors), 2)
 
-    def test_external_media_is_opt_in_per_server_and_never_gets_credentials(self):
+    def test_external_media_is_opt_in_https_public_only_and_never_gets_credentials(self):
         with RunningServer("media-token") as source, RunningServer() as open_host, \
                 RunningServer("media-token") as guarded_host:
             server = normalize_server({"label": "Media", "baseUrl": source.url, "topics": ["alerts"],
@@ -609,12 +612,31 @@ class BridgeCase(unittest.TestCase):
 
             server = normalize_server({**server, "allowExternalMedia": True})
             self.assertTrue(public_server(server)["allowExternalMedia"])
-            self.assertTrue(bridge.download_media(server, "icon", open_host.url + "/icon.png").exists())
-            # A host demanding the server's own token must not receive it.
-            with self.assertRaisesRegex(MediaError, "returned 401"):
-                bridge.download_media(server, "icon", guarded_host.url + "/icon.png")
-            with self.assertRaises(MediaError):
-                bridge.download_media(server, "icon", open_host.url + "/bad-media")
+            # Same-origin media keeps working even though the server is local.
+            self.assertTrue(bridge.download_media(server, "icon", source.url + "/icon.png").exists())
+            with self.assertRaisesRegex(MediaError, "HTTPS"):
+                bridge.download_media(server, "icon", open_host.url + "/icon.png")
+            for private in ("https://127.0.0.1/a.png", "https://localhost/a.png", "https://10.1.2.3/a.png",
+                            "https://192.168.1.5/a.png", "https://100.64.0.1/a.png", "https://[::1]/a.png",
+                            "https://169.254.169.254/a.png"):
+                with self.assertRaisesRegex(MediaError, "public addresses"):
+                    bridge.download_media(server, "icon", private)
+            to_local = source.url + "/redirect?" + urllib.parse.urlencode({"to": "https://127.0.0.1/a.png"})
+            with self.assertRaisesRegex(MediaError, "public addresses"):
+                bridge.download_media(server, "icon", to_local)
+            self.assertTrue(bridge_module.resolves_to_public_addresses("8.8.8.8", 443))
+            self.assertFalse(bridge_module.resolves_to_public_addresses("invalid.invalid", 443))
+
+            # With the host policy out of the way, the server's token still never
+            # reaches another host: one that demands it gets no header and refuses.
+            original = bridge_module.validate_media_url
+            bridge_module.validate_media_url = lambda _server, value: bridge_module.validate_web_url(value)
+            try:
+                self.assertTrue(bridge.download_media(server, "icon", open_host.url + "/icon.png").exists())
+                with self.assertRaisesRegex(MediaError, "returned 401"):
+                    bridge.download_media(server, "icon", guarded_host.url + "/icon.png")
+            finally:
+                bridge_module.validate_media_url = original
 
     def test_native_toast_shows_same_origin_image_attachment(self):
         with RunningServer("media-token") as source:
@@ -646,6 +668,13 @@ class BridgeCase(unittest.TestCase):
                 row["attachment"] = attachment
                 bridge.send_native_toast(server, row)
                 self.assertNotIn("--image", sent.pop())
+
+            # A cache already full of referenced media evicts the new, unreferenced
+            # toast image straight away; the toast must not point at a missing file.
+            row["attachment"] = {"name": "icon.png", "type": "image/png", "url": source.url + "/icon.png"}
+            bridge.enforce_media_cache = lambda: [path.unlink() for path in bridge.media_dir.iterdir()]
+            bridge.send_native_toast(server, row)
+            self.assertNotIn("--image", sent.pop())
 
     def test_save_delete_results_and_malformed_config_protection(self):
         bridge = self.make_bridge({"version": 1, "servers": []})
