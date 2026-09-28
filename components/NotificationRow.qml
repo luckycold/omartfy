@@ -285,38 +285,12 @@ CursorSurface {
         }
       }
 
-      Flow {
-        width: parent.width
-        height: visible ? childrenRect.height : 0
-        visible: root.notificationActions.length > 0
-        spacing: Style.space(7)
-
-        Repeater {
-          model: root.notificationActions
-          delegate: Button {
-            required property var modelData
-            readonly property var actionState: root.service
-              ? root.service.actionState(root.notification.notificationKey, modelData.id)
-              : ({ state: "idle", text: "" })
-            readonly property bool trusted: modelData.action !== "http" || root.allowHttpActions
-
-            text: (actionState.state === "working" ? "Working"
-              : (actionState.state === "done" ? "Done" : String(modelData.label || "Action"))).toUpperCase()
-            enabled: root.actionsEnabled && trusted && actionState.state !== "working"
-            onClicked: root.actionRequested(root.notification.notificationKey, modelData)
-          }
-        }
-      }
-
       Repeater {
         model: root.notificationActions
         delegate: Column {
           required property var modelData
           width: parent.width
           spacing: Style.space(2)
-          readonly property var actionState: root.service
-            ? root.service.actionState(root.notification.notificationKey, modelData.id)
-            : ({ state: "idle", text: "" })
           readonly property bool trusted: modelData.action !== "http" || root.allowHttpActions
 
           Text {
@@ -327,17 +301,51 @@ CursorSurface {
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
           }
-
-          Text {
-            visible: parent.actionState.state === "error"
-            text: parent.actionState.text
-            color: Color.urgent
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            elide: Text.ElideRight
-            width: parent.width
-          }
         }
+      }
+    }
+
+    // Publisher actions stay on the card, as on Android, so they work without
+    // expanding the row. Untrusted HTTP actions stay clickable and report why
+    // they were refused inline, like any other failure.
+    Flow {
+      width: parent.width
+      height: visible ? childrenRect.height : 0
+      visible: root.notificationActions.length > 0
+      spacing: Style.space(7)
+
+      Repeater {
+        model: root.notificationActions
+        delegate: Button {
+          required property var modelData
+          readonly property var actionState: root.service
+            ? root.service.actionState(root.notification.notificationKey, modelData.id)
+            : ({ state: "idle", text: "" })
+
+          text: (actionState.state === "working" ? "Working"
+            : (actionState.state === "done" ? "Done" : String(modelData.label || "Action"))).toUpperCase()
+          enabled: root.actionsEnabled && actionState.state !== "working"
+          onClicked: root.actionRequested(root.notification.notificationKey, modelData)
+        }
+      }
+    }
+
+    Repeater {
+      model: root.notificationActions
+      delegate: Text {
+        required property var modelData
+        readonly property var actionState: root.service
+          ? root.service.actionState(root.notification.notificationKey, modelData.id)
+          : ({ state: "idle", text: "" })
+        width: parent.width
+        visible: actionState.state === "error"
+        text: String(modelData.label || "Action") + " failed: " + actionState.text
+        color: Color.urgent
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.Wrap
+        maximumLineCount: 2
+        elide: Text.ElideRight
       }
     }
   }
