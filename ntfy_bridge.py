@@ -729,11 +729,12 @@ class Bridge:
             "--app-name", "Omartfy",
             "--glyph", "󰂚",
             "--urgency", urgency,
-            "--exec", "omarchy-shell shell summon dailen.omartfy '{}'",
             summary, body,
         ]
         if expire_time:
             argv.extend(["--expire-time", expire_time])
+        # --exec consumes the rest of the argv as the click command, so it goes last.
+        argv.extend(["--exec", "omarchy-shell", "shell", "summon", "dailen.omartfy", "{}"])
 
         try:
             self.notification_sender(argv)

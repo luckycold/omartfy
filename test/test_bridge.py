@@ -516,18 +516,18 @@ class BridgeCase(unittest.TestCase):
         })
         bridge.send_native_toast(server, row)
         argv = sent.pop()
-        self.assertEqual(argv[:9], [
+        self.assertEqual(argv[:7], [
             "omarchy-notification-send",
             "--app-name", "Omartfy",
             "--glyph", "󰂚",
             "--urgency", "low",
-            "--exec", "omarchy-shell shell summon dailen.omartfy '{}'",
         ])
-        self.assertTrue(argv[9].startswith(" --exec "))
-        self.assertIn("&lt;b&gt;&amp;&quot;", argv[9])
-        self.assertIn("Hello &lt;script&gt;&amp;", argv[10])
-        self.assertLessEqual(len(bridge_module.html.unescape(argv[9]).lstrip()), 160)
-        self.assertLessEqual(len(bridge_module.html.unescape(argv[10])), 500)
+        self.assertEqual(argv[-6:], ["--exec", "omarchy-shell", "shell", "summon", "dailen.omartfy", "{}"])
+        self.assertTrue(argv[7].startswith(" --exec "))
+        self.assertIn("&lt;b&gt;&amp;&quot;", argv[7])
+        self.assertIn("Hello &lt;script&gt;&amp;", argv[8])
+        self.assertLessEqual(len(bridge_module.html.unescape(argv[7]).lstrip()), 160)
+        self.assertLessEqual(len(bridge_module.html.unescape(argv[8])), 500)
         joined = "\0".join(argv)
         for protected in (
             "private-token", "https://click.invalid", "https://icon.invalid",
@@ -545,7 +545,7 @@ class BridgeCase(unittest.TestCase):
             bridge.send_native_toast(server, row)
             current = sent.pop()
             self.assertEqual(current[6], urgency)
-            self.assertEqual(current[-2:], ["--expire-time", timeout])
+            self.assertEqual(current[9:11], ["--expire-time", timeout])
 
         bridge.config["toasts"]["duration"] = "until-dismissed"
         bridge.send_native_toast(server, row)
@@ -589,10 +589,10 @@ class BridgeCase(unittest.TestCase):
         self.assertIn("--app-name=evil", joined)
         self.assertIn("--expire-time=999999", joined)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", joined)
-        body_arg = injected[10]
+        body_arg = injected[8]
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", body_arg)
         self.assertEqual(bridge_module.html.unescape(body_arg).splitlines()[1], "--expire-time=999999 <script>alert(1)</script>")
-        summary_arg = injected[9]
+        summary_arg = injected[7]
         self.assertTrue(summary_arg.startswith(" --icon="))
         self.assertEqual(len(errors), 2)
 
