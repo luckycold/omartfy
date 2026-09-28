@@ -36,8 +36,20 @@ MAX_DISMISSED = 200
 MAX_MEDIA_FILE = 5 * 1024 * 1024
 MAX_MEDIA_CACHE = 50 * 1024 * 1024
 MAX_IMAGE_DIMENSION = 4096
-STREAM_TIMEOUT_SECONDS = 10
-POLL_INTERVAL_SECONDS = 10
+# ntfy sends a keepalive every 45 seconds by default, so a quiet stream is
+# only dead once it has been silent for well over that.
+STREAM_TIMEOUT_SECONDS = 90
+POLL_INTERVAL_SECONDS = 60
+# A server that fell back to polling retries streaming after this many polls.
+POLLS_BEFORE_STREAM_RETRY = 10
+# Subscription requests share one budget per server origin, well under
+# ntfy.sh's default visitor limit (a burst of 60, then one every 5 seconds),
+# however many profiles point at that origin.
+REQUEST_BURST = 20
+REQUEST_REFILL_SECONDS = 10.0
+RETRY_DELAYS = [2, 4, 8, 16, 32, 60, 120, 300]
+RATE_LIMIT_MIN_DELAY = 60.0
+MAX_RETRY_DELAY = 600.0
 HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}
 FORBIDDEN_ACTION_HEADERS = {"host", "content-length", "transfer-encoding", "connection"}
 BATCH_ACTIONS = {"delete_all", "read_all"}
@@ -438,6 +450,27 @@ def image_info(data: bytes) -> tuple[str, int, int]:
     raise MediaError("Unsupported image format")
 
 
+class RequestPacer:
+    """Token bucket per server origin, shared by every profile on that origin."""
+
+    def __init__(self, burst: int = REQUEST_BURST, refill_seconds: float = REQUEST_REFILL_SECONDS,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        self.burst = float(burst)
+        self.refill_seconds = float(refill_seconds)
+        self.clock = clock
+        self.lock = threading.Lock()
+        self.buckets: dict[tuple[str, str, int], tuple[float, float]] = {}
+
+    def reserve(self, origin: tuple[str, str, int]) -> float:
+        """Take one request slot and return how long to wait before using it."""
+        with self.lock:
+            now = self.clock()
+            tokens, last = self.buckets.get(origin, (self.burst, now))
+            tokens = min(self.burst, tokens + (now - last) / self.refill_seconds) - 1.0
+            self.buckets[origin] = (tokens, now)
+            return 0.0 if tokens >= 0 else -tokens * self.refill_seconds
+
+
 class SubscriptionWorker(threading.Thread):
     def __init__(self, bridge: "Bridge", server: dict[str, Any],
                  bootstrap_topics: list[str] | None = None,
@@ -458,12 +491,23 @@ class SubscriptionWorker(threading.Thread):
         with self.response_lock:
             response = self.response
         if response is not None:
+            # close() waits for the worker's in-flight readline, which can sit for
+            # the whole stream timeout; shutting the socket down wakes it now.
+            sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
             try:
                 response.close()
             except Exception:
                 pass
 
     def _open(self, topics: list[str], since: str, poll: bool) -> Any:
+        wait = self.bridge.request_pacer.reserve(origin_tuple(self.server["baseUrl"]))
+        if wait and (self.stop_event.wait(wait) or self.bridge.stop_event.is_set()):
+            raise InterruptedError("Subscription stopped")
         request = urllib.request.Request(stream_url(self.server, topics, since, poll), method="GET")
         authorization = authorization_header(self.server)
         if authorization:
@@ -504,13 +548,16 @@ class SubscriptionWorker(threading.Thread):
                     return
                 self.bridge.emit({"event": "error", "fatal": False,
                                   "message": f"Could not load topics: HTTP {error.code}"})
+            except InterruptedError:
+                return
             except Exception as error:
                 self.bridge.emit({"event": "error", "fatal": False,
                                   "message": self.bridge.safe_error(error, "Could not load topics")})
 
-        delays = [1, 2, 4, 8, 16]
         attempt = 0
+        rate_limited = 0
         poll_mode = False
+        polls = 0
         while not self.stop_event.is_set() and not self.bridge.stop_event.is_set():
             if not poll_mode:
                 self.bridge.set_server_status(server_id, "connecting", "")
@@ -524,6 +571,7 @@ class SubscriptionWorker(threading.Thread):
                 with self.response_lock:
                     self.response = response
                 attempt = 0
+                rate_limited = 0
                 self.bridge.set_server_status(server_id, "connected", "")
                 try:
                     self._consume(response, advance_cursor=True, show_toast=True)
@@ -534,6 +582,9 @@ class SubscriptionWorker(threading.Thread):
                 if self.stop_event.is_set() or self.bridge.stop_event.is_set():
                     return
                 if poll_mode:
+                    polls += 1
+                    if polls >= POLLS_BEFORE_STREAM_RETRY:
+                        poll_mode, polls = False, 0
                     self.stop_event.wait(POLL_INTERVAL_SECONDS)
                     continue
                 raise EOFError("ntfy stream closed")
@@ -545,15 +596,16 @@ class SubscriptionWorker(threading.Thread):
                     self.bridge.set_server_status(server_id, "auth-error", "Authentication failed")
                     return
                 if error.code == 429:
+                    # Hammering a rate limit gets the address blocked outright, so
+                    # back off hard and keep doubling while it persists.
                     try:
-                        delay = min(60.0, max(0.0, float(error.headers.get("Retry-After", "1"))))
+                        retry_after = float(error.headers.get("Retry-After") or 0)
                     except (TypeError, ValueError):
-                        delay = 1.0
-                elif 500 <= error.code <= 599:
-                    delay = delays[min(attempt, len(delays) - 1)] if attempt < len(delays) else 30
-                    attempt += 1
+                        retry_after = 0.0
+                    delay = max(retry_after, RATE_LIMIT_MIN_DELAY * 2 ** min(rate_limited, 4))
+                    rate_limited += 1
                 else:
-                    delay = delays[min(attempt, len(delays) - 1)] if attempt < len(delays) else 30
+                    delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
                     attempt += 1
                 message = f"HTTP {error.code}"
             except TimeoutError as error:
@@ -562,9 +614,9 @@ class SubscriptionWorker(threading.Thread):
                 if self.stop_event.is_set() or self.bridge.stop_event.is_set():
                     return
                 if not poll_mode:
-                    poll_mode = True
+                    poll_mode, polls = True, 0
                     continue
-                delay = delays[min(attempt, len(delays) - 1)] if attempt < len(delays) else 30
+                delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
                 attempt += 1
                 message = self.bridge.safe_error(error, "Polling timed out")
             except Exception as error:
@@ -572,10 +624,10 @@ class SubscriptionWorker(threading.Thread):
                     self.response = None
                 if self.stop_event.is_set() or self.bridge.stop_event.is_set():
                     return
-                delay = delays[min(attempt, len(delays) - 1)] if attempt < len(delays) else 30
+                delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
                 attempt += 1
                 message = self.bridge.safe_error(error, "Connection lost")
-            jittered = min(60.0, delay * random.uniform(0.85, 1.15))
+            jittered = min(MAX_RETRY_DELAY, delay * random.uniform(0.85, 1.15))
             self.bridge.set_server_status(server_id, "backoff", message)
             self.stop_event.wait(jittered)
 
@@ -600,6 +652,7 @@ class Bridge:
         # One worker keeps toasts in arrival order while their image downloads
         # stay off the subscription streams.
         self.toast_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ntfy-toast")
+        self.request_pacer = RequestPacer()
         self.workers: dict[str, SubscriptionWorker] = {}
         self.statuses: dict[str, dict[str, str]] = {}
         self.inflight_actions: set[tuple[str, str]] = set()

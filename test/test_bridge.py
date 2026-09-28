@@ -224,6 +224,69 @@ class BridgeCase(unittest.TestCase):
             self.assertTrue(wait_until(lambda: other.statuses.get(wrong["id"], {}).get("state") == "auth-error"))
             self.assertNotIn("wrong", self.output.getvalue())
 
+    def test_request_pacer_shares_one_budget_per_origin(self):
+        now = [0.0]
+        pacer = bridge_module.RequestPacer(burst=3, refill_seconds=10.0, clock=lambda: now[0])
+        ntfy = ("https", "ntfy.sh", 443)
+        self.assertEqual([pacer.reserve(ntfy) for _ in range(3)], [0.0, 0.0, 0.0])
+        self.assertAlmostEqual(pacer.reserve(ntfy), 10.0)
+        self.assertAlmostEqual(pacer.reserve(ntfy), 20.0)
+        self.assertEqual(pacer.reserve(("https", "home.example", 443)), 0.0)
+        now[0] = 60.0
+        self.assertEqual(pacer.reserve(ntfy), 0.0)
+
+    def run_worker_until(self, bridge, server, responses, waits_wanted):
+        """Drive one worker through scripted responses, recording URLs and backoff waits."""
+        urls, waits = [], []
+        worker = SubscriptionWorker(bridge, server)
+
+        def fake_urlopen(request, timeout=None):
+            urls.append(request.full_url)
+            outcome = responses(len(urls))
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        def fake_wait(seconds=None):
+            waits.append(seconds)
+            if len(waits) >= waits_wanted:
+                worker.stop_event.set()
+            return worker.stop_event.is_set()
+
+        bridge.urlopen = fake_urlopen
+        worker.stop_event.wait = fake_wait
+        worker.run()
+        return urls, waits
+
+    def test_rate_limits_back_off_hard_and_polling_returns_to_streaming(self):
+        server = normalize_server({"label": "Cloud", "baseUrl": "https://ntfy.example", "topics": ["alerts"]})
+        bridge = self.make_bridge({"version": 1, "servers": [server]})
+        bridge.request_pacer = bridge_module.RequestPacer(burst=1000)
+
+        def limited(_count):
+            return urllib.error.HTTPError("https://ntfy.example", 429, "Too Many Requests", {}, None)
+        _urls, waits = self.run_worker_until(bridge, server, limited, 6)
+        self.assertGreaterEqual(min(waits), 60 * 0.85)
+        self.assertGreater(waits[4], waits[0] * 8)
+        self.assertLessEqual(max(waits), bridge_module.MAX_RETRY_DELAY)
+
+        def retry_after(_count):
+            return urllib.error.HTTPError("https://ntfy.example", 429, "Too Many Requests",
+                                          {"Retry-After": "400"}, None)
+        _urls, waits = self.run_worker_until(bridge, server, retry_after, 1)
+        self.assertGreaterEqual(waits[0], 400 * 0.85)
+
+        # A stream timeout falls back to polling, and streaming is retried later
+        # instead of polling forever.
+        def stream_times_out(count):
+            return TimeoutError("timed out") if count == 1 else io.BytesIO(b"")
+        urls, _waits = self.run_worker_until(bridge, server, stream_times_out,
+                                             bridge_module.POLLS_BEFORE_STREAM_RETRY + 1)
+        polled = ["poll=1" in url for url in urls]
+        self.assertFalse(polled[0])
+        self.assertTrue(all(polled[1:bridge_module.POLLS_BEFORE_STREAM_RETRY + 1]))
+        self.assertFalse(polled[bridge_module.POLLS_BEFORE_STREAM_RETRY + 1])
+
     def test_buffered_stream_bootstraps_and_falls_back_to_polling(self):
         old_timeout = bridge_module.STREAM_TIMEOUT_SECONDS
         old_interval = bridge_module.POLL_INTERVAL_SECONDS
