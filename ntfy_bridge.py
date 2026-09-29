@@ -6,13 +6,16 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
+import http.client
 import ipaddress
 import json
+import math
 import os
 import random
 import re
 import secrets
 import socket
+import ssl
 import stat
 import struct
 import subprocess
@@ -62,6 +65,7 @@ REQUEST_REFILL_SECONDS = 10.0
 RETRY_DELAYS = [2, 4, 8, 16, 32, 60, 120, 300]
 RATE_LIMIT_MIN_DELAY = 60.0
 MAX_RETRY_DELAY = 600.0
+MAX_RETRY_AFTER = 86400.0
 HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}
 FORBIDDEN_ACTION_HEADERS = {"host", "content-length", "transfer-encoding", "connection"}
 BATCH_ACTIONS = {"delete_all", "read_all"}
@@ -327,13 +331,85 @@ def validate_web_url(value: Any) -> str:
     return url
 
 
-def resolves_to_public_addresses(hostname: str, port: int) -> bool:
+def resolve_public_address(hostname: str, port: int, timeout: float) -> str:
+    """Resolve within the timeout and return an address to pin, if every result is public."""
+    outcome: dict[str, Any] = {}
+
+    def lookup() -> None:
+        try:
+            outcome["infos"] = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        except (OSError, UnicodeError) as error:
+            outcome["error"] = error
+
+    # getaddrinfo takes no timeout, so the lookup runs on a daemon thread that
+    # is abandoned if the system resolver outlasts the deadline.
+    resolver = threading.Thread(target=lookup, name="ntfy-resolve", daemon=True)
+    resolver.start()
+    resolver.join(max(0.0, timeout))
+    if resolver.is_alive():
+        raise MediaError("External media lookup timed out")
+    addresses = [info[4][0].split("%", 1)[0] for info in outcome.get("infos") or []]
+    parsed = {ipaddress.ip_address(address) for address in addresses}
+    if not parsed or not all(address.is_global and not address.is_multicast for address in parsed):
+        raise MediaError("External media must resolve to public addresses")
+    return addresses[0]
+
+
+def resolves_to_public_addresses(hostname: str, port: int, timeout: float = 8.0) -> bool:
     try:
-        infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
-    except (OSError, UnicodeError):
+        resolve_public_address(hostname, port, timeout)
+    except MediaError:
         return False
-    addresses = {ipaddress.ip_address(info[4][0].split("%", 1)[0]) for info in infos}
-    return bool(addresses) and all(address.is_global and not address.is_multicast for address in addresses)
+    return True
+
+
+class PinnedHTTPConnection(http.client.HTTPConnection):
+    """Connects to an address checked in advance, never a fresh DNS answer."""
+
+    def __init__(self, host: str, address: str, **kwargs: Any) -> None:
+        super().__init__(host, **kwargs)
+        self.pinned_address = address
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection((self.pinned_address, self.port), self.timeout, self.source_address)
+
+
+class PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """TLS to a pre-checked address, verifying the certificate for the hostname."""
+
+    def __init__(self, host: str, address: str, **kwargs: Any) -> None:
+        self.pinned_context = ssl.create_default_context()
+        super().__init__(host, context=self.pinned_context, **kwargs)
+        self.pinned_address = address
+
+    def connect(self) -> None:
+        sock = socket.create_connection((self.pinned_address, self.port), self.timeout, self.source_address)
+        self.sock = self.pinned_context.wrap_socket(sock, server_hostname=self.host)
+
+
+class PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, address: str) -> None:
+        super().__init__()
+        self.pinned_address = address
+
+    def http_open(self, req: urllib.request.Request) -> Any:
+        return self.do_open(lambda host, **kwargs: PinnedHTTPConnection(host, self.pinned_address, **kwargs), req)
+
+
+class PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, address: str) -> None:
+        super().__init__()
+        self.pinned_address = address
+
+    def https_open(self, req: urllib.request.Request) -> Any:
+        return self.do_open(lambda host, **kwargs: PinnedHTTPSConnection(host, self.pinned_address, **kwargs), req)
+
+
+def pinned_media_opener(address: str) -> urllib.request.OpenerDirector:
+    # An empty ProxyHandler keeps ambient proxy settings from carrying the
+    # request somewhere other than the pinned address.
+    return urllib.request.build_opener(NoRedirect, urllib.request.ProxyHandler({}),
+                                       PinnedHTTPHandler(address), PinnedHTTPSHandler(address))
 
 
 def validate_media_url(server: dict[str, Any], value: Any) -> str:
@@ -343,12 +419,10 @@ def validate_media_url(server: dict[str, Any], value: Any) -> str:
     if not server.get("allowExternalMedia", False):
         raise MediaError("Media URL must use the configured server origin")
     # The external-media opt-in covers other public hosts, never the local
-    # network, and never plaintext. Redirects come back through here too.
-    scheme, hostname, port = origin_tuple(url)
-    if scheme != "https":
+    # network, and never plaintext. Redirects come back through here too;
+    # download_media resolves and pins a public address for each hop.
+    if origin_tuple(url)[0] != "https":
         raise MediaError("External media must use HTTPS")
-    if not resolves_to_public_addresses(hostname, port):
-        raise MediaError("External media must resolve to public addresses")
     return url
 
 
@@ -613,9 +687,14 @@ class SubscriptionWorker(threading.Thread):
                     # Hammering a rate limit gets the address blocked outright, so
                     # back off hard and keep doubling while it persists.
                     try:
-                        retry_after = max(0.0, float(error.headers.get("Retry-After") or 0))
+                        retry_after = float(error.headers.get("Retry-After") or 0)
                     except (TypeError, ValueError):
                         retry_after = 0.0
+                    # inf, NaN or an absurd value would overflow the wait below
+                    # and kill this worker; a day is the longest honoured.
+                    if not math.isfinite(retry_after) or retry_after < 0:
+                        retry_after = 0.0
+                    retry_after = min(retry_after, MAX_RETRY_AFTER)
                     delay = max(retry_after, RATE_LIMIT_MIN_DELAY * 2 ** min(rate_limited, 4))
                     rate_limited += 1
                 else:
@@ -1486,19 +1565,26 @@ class Bridge:
                        "ok": False, "path": "", "error": self.safe_error(error, "Could not load media")})
 
     def download_media(self, server: dict[str, Any], kind: str, source_url: str) -> Path:
+        deadline = time.monotonic() + 8
         url = validate_media_url(server, source_url)
         base_origin = origin_tuple(server["baseUrl"])
-        opener = urllib.request.build_opener(NoRedirect)
+        same_origin_opener = urllib.request.build_opener(NoRedirect)
         redirects = 0
-        deadline = time.monotonic() + 8
         response: Any = None
         while True:
             if time.monotonic() >= deadline:
                 raise MediaError("Media request timed out")
             request = urllib.request.Request(url, method="GET", headers={"User-Agent": USER_AGENT})
-            auth = authorization_header(server)
-            if auth and origin_tuple(url) == base_origin:
-                request.add_header("Authorization", auth)
+            origin = origin_tuple(url)
+            if origin == base_origin:
+                opener = same_origin_opener
+                auth = authorization_header(server)
+                if auth:
+                    request.add_header("Authorization", auth)
+            else:
+                _scheme, hostname, port = origin
+                address = resolve_public_address(hostname, port, deadline - time.monotonic())
+                opener = pinned_media_opener(address)
             try:
                 response = opener.open(request, timeout=max(0.1, deadline - time.monotonic()))
                 break

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import socket
 import stat
 import subprocess
 import sys
@@ -282,6 +283,17 @@ class BridgeCase(unittest.TestCase):
                                           {"Retry-After": "3600"}, None)
         _urls, waits = self.run_worker_until(bridge, server, long_retry_after, 1)
         self.assertEqual(waits[0], 3600)
+
+        # Non-finite or absurd values must not overflow the wait and kill the worker.
+        for header, low, high in (("inf", 60 * 0.85, bridge_module.MAX_RETRY_DELAY),
+                                  ("nan", 60 * 0.85, bridge_module.MAX_RETRY_DELAY),
+                                  ("-5", 60 * 0.85, bridge_module.MAX_RETRY_DELAY),
+                                  ("1e12", bridge_module.MAX_RETRY_AFTER, bridge_module.MAX_RETRY_AFTER)):
+            def odd_retry_after(_count, header=header):
+                return urllib.error.HTTPError("https://ntfy.example", 429, "Too Many Requests",
+                                              {"Retry-After": header}, None)
+            _urls, waits = self.run_worker_until(bridge, server, odd_retry_after, 1)
+            self.assertTrue(low <= waits[0] <= high, (header, waits[0]))
 
         # A stream timeout falls back to polling, and streaming is retried later
         # instead of polling forever.
@@ -711,14 +723,33 @@ class BridgeCase(unittest.TestCase):
 
             # With the host policy out of the way, the server's token still never
             # reaches another host: one that demands it gets no header and refuses.
-            original = bridge_module.validate_media_url
-            bridge_module.validate_media_url = lambda _server, value: bridge_module.validate_web_url(value)
-            try:
-                self.assertTrue(bridge.download_media(server, "icon", open_host.url + "/icon.png").exists())
+            # The pinned address is what gets connected to, not a fresh DNS answer:
+            # "media.invalid" never resolves, yet the fetch reaches the mock host.
+            open_port = urllib.parse.urlsplit(open_host.url).port
+            guarded_port = urllib.parse.urlsplit(guarded_host.url).port
+            with unittest.mock.patch.object(bridge_module, "validate_media_url",
+                                            lambda _server, value: bridge_module.validate_web_url(value)), \
+                    unittest.mock.patch.object(bridge_module, "resolve_public_address",
+                                               lambda _host, _port, _timeout: "127.0.0.1"), \
+                    unittest.mock.patch.dict(os.environ, {"http_proxy": "http://127.0.0.1:9", "https_proxy": "http://127.0.0.1:9"}):
+                self.assertTrue(bridge.download_media(
+                    server, "icon", f"http://media.invalid:{open_port}/icon.png").exists())
                 with self.assertRaisesRegex(MediaError, "returned 401"):
-                    bridge.download_media(server, "icon", guarded_host.url + "/icon.png")
-            finally:
-                bridge_module.validate_media_url = original
+                    bridge.download_media(server, "icon", f"http://media.invalid:{guarded_port}/icon.png")
+
+            def slow_lookup(*_args, **_kwargs):
+                time.sleep(2)
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))]
+            with unittest.mock.patch.object(bridge_module.socket, "getaddrinfo", slow_lookup):
+                started = time.monotonic()
+                with self.assertRaisesRegex(MediaError, "lookup timed out"):
+                    bridge_module.resolve_public_address("slow.example", 443, 0.2)
+                self.assertLess(time.monotonic() - started, 1.0)
+            mixed = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443)),
+                     (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))]
+            with unittest.mock.patch.object(bridge_module.socket, "getaddrinfo", return_value=mixed):
+                with self.assertRaisesRegex(MediaError, "public addresses"):
+                    bridge_module.resolve_public_address("mixed.example", 443, 1.0)
 
     def test_native_toast_shows_same_origin_image_attachment(self):
         with RunningServer("media-token") as source:
