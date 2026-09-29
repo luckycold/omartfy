@@ -104,6 +104,8 @@ o.bind("SUPER + N", "Omartfy notifications", "omarchy-shell shell toggle dailen.
 
 The panel focuses its first notification when opened from the shortcut.
 
+Clicking a notification that has a click URL opens it and marks it read, as tapping one does on a phone. Use the ⌄ button beside ✓ and × (or `e`) to expand it instead. Notifications without a click URL expand when clicked.
+
 | Key | Action |
 | --- | --- |
 | `j` / `k`, Up / Down | Select notification |

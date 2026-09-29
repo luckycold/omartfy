@@ -19,6 +19,7 @@ CursorSurface {
 
   signal hovered(int rowIndex)
   signal activated(int rowIndex)
+  signal expandRequested(int rowIndex)
   signal markReadRequested(string notificationKey)
   signal deleteRequested(string notificationKey)
   signal actionRequested(string notificationKey, var action)
@@ -158,6 +159,17 @@ CursorSurface {
             id: rowActions
             visible: root.current
             spacing: Style.space(1)
+
+            // Tapping a row with a link opens it, so expanding needs its own control.
+            PanelActionButton {
+              visible: !!root.notification.click
+              size: Style.space(20)
+              iconText: root.expanded ? "⌃" : "⌄"
+              tooltipText: root.expanded ? "Collapse" : "Expand"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.expandRequested(root.rowIndex)
+            }
 
             PanelActionButton {
               size: Style.space(20)
