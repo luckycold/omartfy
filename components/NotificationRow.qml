@@ -322,7 +322,6 @@ CursorSurface {
     // they were refused inline, like any other failure.
     Flow {
       width: parent.width
-      height: visible ? childrenRect.height : 0
       visible: root.notificationActions.length > 0
       spacing: Style.space(7)
 
