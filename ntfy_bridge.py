@@ -38,6 +38,18 @@ MAX_MEDIA_CACHE = 50 * 1024 * 1024
 MAX_IMAGE_DIMENSION = 4096
 # ntfy sends a keepalive every 45 seconds by default, so a quiet stream is
 # only dead once it has been silent for well over that.
+def plugin_version() -> str:
+    try:
+        manifest = json.loads((Path(__file__).resolve().parent / "manifest.json").read_text(encoding="utf-8"))
+        return str(manifest.get("version") or "dev")
+    except (OSError, ValueError, AttributeError):
+        return "dev"
+
+
+# Sent on every request. Python's default "Python-urllib/3.x" is refused by
+# common bot filters (Cloudflare answers it with error 1010) before the
+# request reaches the ntfy server or an HTTP action's target.
+USER_AGENT = f"Omartfy/{plugin_version()} (+https://github.com/DailenG/omartfy)"
 STREAM_TIMEOUT_SECONDS = 90
 POLL_INTERVAL_SECONDS = 60
 # A server that fell back to polling retries streaming after this many polls.
@@ -508,7 +520,8 @@ class SubscriptionWorker(threading.Thread):
         wait = self.bridge.request_pacer.reserve(origin_tuple(self.server["baseUrl"]))
         if wait and (self.stop_event.wait(wait) or self.bridge.stop_event.is_set()):
             raise InterruptedError("Subscription stopped")
-        request = urllib.request.Request(stream_url(self.server, topics, since, poll), method="GET")
+        request = urllib.request.Request(stream_url(self.server, topics, since, poll), method="GET",
+                                         headers={"User-Agent": USER_AGENT})
         authorization = authorization_header(self.server)
         if authorization:
             request.add_header("Authorization", authorization)
@@ -764,8 +777,20 @@ class Bridge:
 
     @staticmethod
     def _run_notification_sender(argv: list[str]) -> None:
-        subprocess.run(argv, check=True, timeout=5, stdin=subprocess.DEVNULL,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Toasts run on their own worker, so a shell that is slow to answer can
+        # take its time without holding up the subscription streams.
+        subprocess.run(argv, check=True, timeout=15, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+    @staticmethod
+    def toast_failure_reason(error: BaseException) -> str:
+        if isinstance(error, subprocess.TimeoutExpired):
+            return f"no reply within {error.timeout:g} seconds"
+        if isinstance(error, subprocess.CalledProcessError):
+            stderr = error.stderr.decode("utf-8", "replace") if isinstance(error.stderr, bytes) else str(error.stderr or "")
+            first_line = next((line.strip() for line in stderr.splitlines() if line.strip()), "")
+            return first_line[:160] or f"exit status {error.returncode}"
+        return str(getattr(error, "strerror", "") or error or type(error).__name__)[:160]
 
     def toast_image(self, server: dict[str, Any], row: dict[str, Any]) -> str:
         attachment = row.get("attachment") or {}
@@ -838,13 +863,13 @@ class Bridge:
 
         try:
             self.notification_sender(argv)
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError) as error:
             with self.toast_lock:
                 should_emit = not self.toast_error_active
                 self.toast_error_active = True
             if should_emit:
                 self.emit({"event": "error", "fatal": False,
-                           "message": "Could not show desktop toast"})
+                           "message": "Could not show desktop toast: " + self.toast_failure_reason(error)})
         else:
             with self.toast_lock:
                 self.toast_error_active = False
@@ -1374,6 +1399,8 @@ class Bridge:
             headers[name] = value
         data = None if not body_text else body_text.encode("utf-8")
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
+        if not request.has_header("User-agent"):
+            request.add_header("User-Agent", USER_AGENT)
         opener = urllib.request.build_opener(NoRedirect)
         try:
             with opener.open(request, timeout=15) as response:
@@ -1398,7 +1425,8 @@ class Bridge:
         try:
             candidate_id = str(candidate.get("id") or "") if isinstance(candidate, dict) else ""
             server = normalize_server(candidate, self.server_by_id(candidate_id) if candidate_id else None)
-            request = urllib.request.Request(stream_url(server, server["topics"], "latest", True), method="GET")
+            request = urllib.request.Request(stream_url(server, server["topics"], "latest", True), method="GET",
+                                             headers={"User-Agent": USER_AGENT})
             auth = authorization_header(server)
             if auth:
                 request.add_header("Authorization", auth)
@@ -1467,7 +1495,7 @@ class Bridge:
         while True:
             if time.monotonic() >= deadline:
                 raise MediaError("Media request timed out")
-            request = urllib.request.Request(url, method="GET")
+            request = urllib.request.Request(url, method="GET", headers={"User-Agent": USER_AGENT})
             auth = authorization_header(server)
             if auth and origin_tuple(url) == base_origin:
                 request.add_header("Authorization", auth)

@@ -350,6 +350,9 @@ class BridgeCase(unittest.TestCase):
             self.assertEqual(allowed["status"], 204)
             self.assertEqual(target.server.state.actions[-1]["method"], "POST")
             self.assertEqual(target.server.state.actions[-1]["body"], '{"ok":true}')
+            # Cloudflare refuses Python's default User-Agent with error 1010.
+            self.assertEqual(target.server.state.actions[-1]["headers"].get("User-Agent"), bridge_module.USER_AGENT)
+            self.assertTrue(bridge_module.USER_AGENT.startswith("Omartfy/"))
 
     def test_media_allows_only_configured_origin_and_rejects_cross_origin_redirects(self):
         with RunningServer("media-token") as source, RunningServer() as target:
@@ -639,8 +642,15 @@ class BridgeCase(unittest.TestCase):
         bridge.notification_sender = fail
         bridge.send_native_toast(server, row)
         bridge.send_native_toast(server, row)
+        self.assertIn("Could not show desktop toast: sender unavailable",
+                      [event.get("message") for event in self.events()])
+        reason = bridge_module.Bridge.toast_failure_reason
+        self.assertEqual(reason(subprocess.TimeoutExpired(["x"], 15)), "no reply within 15 seconds")
+        self.assertEqual(reason(subprocess.CalledProcessError(1, ["x"], stderr=b"\nUnknown option: -z\nusage")),
+                         "Unknown option: -z")
+        self.assertEqual(reason(subprocess.CalledProcessError(2, ["x"], stderr=b"")), "exit status 2")
         errors = [event for event in self.events()
-                  if event.get("message") == "Could not show desktop toast"]
+                  if str(event.get("message", "")).startswith("Could not show desktop toast")]
         self.assertEqual(len(errors), 1)
         bridge.notification_sender = sent.append
         bridge.send_native_toast(server, row)
@@ -648,7 +658,7 @@ class BridgeCase(unittest.TestCase):
         bridge.notification_sender = fail
         bridge.send_native_toast(server, row)
         errors = [event for event in self.events()
-                  if event.get("message") == "Could not show desktop toast"]
+                  if str(event.get("message", "")).startswith("Could not show desktop toast")]
         bridge.notification_sender = sent.append
         malicious_row = bridge.normalize_message(server["id"], {
             "event": "message", "id": "inject", "topic": "alerts", "priority": 3,
